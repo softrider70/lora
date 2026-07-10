@@ -18,6 +18,7 @@
 #include "freertos/timers.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_mac.h"
 #include "nvs_flash.h"
 #include "driver/gpio.h"
 #include "config.h"
@@ -276,8 +277,18 @@ void app_main(void)
     gpio_config(&btn_conf);
 
     ESP_ERROR_CHECK(nvs_config_init());
-    node_id = nvs_config_get_u8("node_id", 1);
-    ESP_LOGI(TAG, "Node-ID: %u", node_id);
+
+    /* Node-ID aus MAC-Adresse ableiten (letztes Byte der MAC, 1-254)
+     * Ueberschreibbar via NVS (Captive Portal oder spaeter per API) */
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    uint8_t mac_node_id = (mac[5] % 254) + 1; /* 1..254 */
+
+    node_id = nvs_config_get_u8("node_id", mac_node_id);
+    if (node_id == 0) node_id = mac_node_id; /* 0 ist ungueltig */
+
+    ESP_LOGI(TAG, "MAC: %02X:%02X:%02X:%02X:%02X:%02X -> Node-ID: %u",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], node_id);
 
     esp_err_t ret = display_init();
     if (ret == ESP_OK) {
