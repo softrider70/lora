@@ -1,0 +1,24 @@
+idf_component_register(
+    SRCS
+        main.c
+        nvs_config.c
+        display.c
+        heap_monitor.c
+        stack_monitor.c
+        lora.c
+        wifi.c
+        ota.c
+    INCLUDE_DIRS
+        ${CMAKE_SOURCE_DIR}/include
+    REQUIRES
+        nvs_flash
+        esp_timer
+        driver
+        esp_wifi
+        esp_netif
+        esp_http_server
+        app_update
+        esp_driver_i2c
+        esp_driver_spi
+        esp_driver_gpio
+)

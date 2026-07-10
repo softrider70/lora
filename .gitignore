@@ -1,0 +1,10 @@
+build/
+sdkconfig
+*.o
+*.su
+*.elf
+*.map
+compile_commands.json
+version.h
+.last_version
+.last_flash_mode.json
