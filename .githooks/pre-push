@@ -1,0 +1,18 @@
+@echo off
+REM Pre-Push Security Hook
+REM Fuehrt vor jedem Push eine Sicherheitspruefung durch
+
+set "SCRIPT_DIR=%~dp0"
+set "PROJECT_DIR=%SCRIPT_DIR%.."
+set "CHECK_SCRIPT=%PROJECT_DIR%\tools\pre-push-security-check.ps1"
+
+if exist "%CHECK_SCRIPT%" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%CHECK_SCRIPT%"
+    if %ERRORLEVEL% NEQ 0 (
+        echo.
+        echo Push abgebrochen - Sicherheitspruefung fehlgeschlagen!
+        exit /b 1
+    )
+) else (
+    echo Warnung: Sicherheits-Skript nicht gefunden: %CHECK_SCRIPT%
+)
