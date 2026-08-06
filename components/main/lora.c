@@ -308,7 +308,6 @@ esp_err_t lora_init(void)
         .mode = 0,
         .spics_io_num = -1,
         .queue_size = 7,
-        .flags = SPI_DEVICE_HALFDUPLEX,
     };
     ESP_ERROR_CHECK(spi_bus_add_device(LORA_SPI_HOST, &dev, &spi_handle));
 
