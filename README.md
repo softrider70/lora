@@ -196,8 +196,10 @@ Weitere Messungen am Sensor-Node (Build 44–53), die die Fehlersuche eingrenzen
   also auch ohne angenommenen TCXO. Das zeigt auf die Hardware des Moduls
   (Quarz/TCXO) und nicht auf eine Code-Einstellung.
 
-Der GPS-Empfänger liefert NMEA (`NMEA-Empfang bei 9600 Baud`, 0 Prüfsummenfehler),
-hatte drinnen aber noch keinen Fix: `Sat 0, Qual 0, HDOP 99.9`. Qual 0 heißt laut
-NMEA ausdrücklich „kein Fix" — das Modul braucht freie Sicht zum Himmel. Der
-GPS-Task meldet diesen Stand alle 10 s, damit man den Unterschied zwischen
-„kein Empfang" und „Empfang, aber kein Fix" im Log sieht.
+Der GPS-Empfänger liefert NMEA (`NMEA-Empfang bei 9600 Baud`, 0 Prüfsummenfehler)
+und hatte im Freien einen gültigen Fix: `Sat 8, Qual 1, HDOP 1.6`. Danach meldet
+das Board `Sende Position #0 (8 Sat)` — die Position wird also korrekt gebaut und
+an den Funkteil übergeben. Ein Fix drinnen bleibt aus (`Sat 0, Qual 0,
+HDOP 99.9`, Qual 0 heißt laut NMEA ausdrücklich „kein Fix") — das Modul braucht
+freie Sicht zum Himmel. Der GPS-Task meldet diesen Stand alle 10 s, damit man den
+Unterschied zwischen „kein Empfang" und „Empfang, aber kein Fix" im Log sieht.

@@ -125,6 +125,20 @@ GPIO3/45/46 sind Strapping-Pins und für externe Signale ungeeignet.
    Gegenprobe mit erprobter Firmware steht aus: Meshtastic-Server
    (`fw.meshtastic.org`) löst nicht auf, das Release-Paket für esp32s3 ist
    162 MB groß.
+   **Weitere Messungen (Build 60–67):**
+   - Das Versionsregister meldet `SX1261 V2D 2D02` — auf dem Modul sitzt die
+     leistungsschwache Variante (max. 15 dBm). Deren PA-Konfiguration
+     (`deviceSel 0x01`, `hpMax 0x00`) ist jetzt gesetzt.
+   - Der Selbsttest in `lora_init` (Aussendung **vor** WiFi und Tasks, Build 67)
+     schlägt ebenfalls fehl (`TX-Timeout`, `XOSC_START`) → kein Versorgungs- oder
+     Störproblem der laufenden Anlage.
+   - Nach dem Start der Tasks antwortet der Chip nur noch mit Statusbytes
+     (Version liest `0xB2`), vorher exakt (`SX12`).
+   - Nächste Versuche: `SetRegulatorMode` auf DC-DC, XTA/XTB-Trim für
+     TCXO-Betrieb, Reset + vollständige Neu-Konfiguration vor dem ersten Senden.
+   - **GPS ist dagegen bewiesen** (Build 60, Board COM8): `Sat 8, Qual 1,
+     HDOP 1.6` und `Sende Position #0 (8 Sat)` — NMEA, Parser, Fix und
+     Nutzlast-Aufbau funktionieren.
 
 ## Arbeitsweise in diesem Projekt
 

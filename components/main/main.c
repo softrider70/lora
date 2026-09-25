@@ -436,16 +436,19 @@ void app_main(void)
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "GPS-Init fehlgeschlagen: %s", esp_err_to_name(ret));
     }
+    lora_debug_check("nach Display und GPS");
 
     ret = wifi_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "WiFi-Init fehlgeschlagen: %s", esp_err_to_name(ret));
     }
+    lora_debug_check("nach WiFi");
 
     ret = ota_init();
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "OTA-Init fehlgeschlagen: %s", esp_err_to_name(ret));
     }
+    lora_debug_check("nach OTA");
 
     heap_monitor_init();
     stack_monitor_init();

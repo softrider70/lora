@@ -75,6 +75,11 @@ esp_err_t lora_ping(uint8_t target_node_id, uint32_t timeout_ms);
 void lora_set_node_id(uint8_t node_id);
 uint8_t lora_get_node_id(void);
 
+/* Diagnose: prueft, ob der Funkchip noch echte Registerdaten liefert.
+ * Erwartet wird der Anfang des Versionsstrings ("SX12"). Kommen nur
+ * Statusbytes (z. B. 0xB2), antwortet der Chip nicht mehr auf Kommandos. */
+void lora_debug_check(const char *wo);
+
 #ifdef __cplusplus
 }
 #endif

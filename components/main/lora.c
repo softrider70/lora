@@ -523,10 +523,12 @@ esp_err_t lora_init(void)
     sx1262_log_device_errors("nach der Kalibrierung");
 
     /* PA-Konfiguration: SetPaConfig (0x95) braucht VIER Bytes:
-     * paDutyCycle, hpMax, deviceSel, paLut. Vorher wurde nur ein Byte gesendet
-     * - das Kommando war damit ungueltig und der SX1262 hat nicht gesendet
-     * (kein TX-Done, IRQ-Status blieb 0x0000). Werte: SX1262, 22 dBm Weg. */
-    uint8_t pa_cfg[4] = { 0x04, 0x07, 0x00, 0x01 };
+     * paDutyCycle, hpMax, deviceSel, paLut.
+     * WICHTIG: Das Versionsregister des Moduls meldet "SX1261 V2D" - also die
+     * leistungsschwache Variante. Deren PA-Konfiguration ist
+     * deviceSel = 0x01 und hpMax = 0x00 (max. 15 dBm). Mit den SX1262-Werten
+     * (deviceSel = 0x00, 22 dBm) lehnt der Chip das Senden ab. */
+    uint8_t pa_cfg[4] = { 0x04, 0x00, 0x01, 0x01 };
     sx1262_cmd_write_buf(SX1262_CMD_SET_PAOCONFIG, pa_cfg, 4);
 
     /* Sendeleistung und Rampe */
@@ -609,6 +611,24 @@ esp_err_t lora_init(void)
     lora_initialized = true;
     ESP_LOGI(TAG, "SX1262 initialisiert (%.3f MHz, SF=%d, BW=125kHz)",
              LORA_FREQUENCY / 1e6, LORA_SF);
+
+    /* Selbsttest: eine kurze Aussendung noch waehrend der Initialisierung, also
+     * bevor WiFi und die Tasks laufen. Klappt sie hier, ist der Funkweg in
+     * Ordnung und ein spaeterer Ausfall liegt an der laufenden Anlage (z. B.
+     * Versorgung). Klappt sie schon hier nicht, liegt es an der Konfiguration
+     * des Chips. */
+    lora_message_t test_msg;
+    memset(&test_msg, 0, sizeof(test_msg));
+    test_msg.type = LORA_MSG_TYPE_STATUS;
+    test_msg.node_id = local_node_id;
+    test_msg.payload_len = 1;
+    test_msg.payload[0] = 0x5A;
+
+    rx_enabled = true;
+    esp_err_t test_ret = lora_send(&test_msg, 1000);
+    ESP_LOGW(TAG, "Selbsttest Senden: %s", esp_err_to_name(test_ret));
+    sx1262_log_device_errors("nach dem Selbsttest");
+
     return ESP_OK;
 }
 
@@ -767,6 +787,13 @@ esp_err_t lora_start_rx(void)
     vTaskDelay(pdMS_TO_TICKS(20));
     sx1262_log_device_errors("vor dem Empfang");
 
+    /* Gegenprobe nach dem WiFi-Start: antwortet der Chip noch mit echten Daten?
+     * Ein Wert wie 0xB2B2 bedeutet, dass er nur noch sein Statusbyte ausgibt -
+     * dann stimmt etwas mit Versorgung oder Bustaktung nicht. */
+    ESP_LOGI(TAG, "Gegenprobe: SyncWord 0x%02X 0x%02X (erwartet 0x14 0x24)",
+             sx1262_read_reg(SX1262_REG_LORA_SYNCWORD),
+             sx1262_read_reg(SX1262_REG_LORA_SYNCWORD + 1));
+
     /* Paket-Laenge auf Maximum setzen */
     uint8_t pktparams[] = {
         (LORA_PREAMBLE_LENGTH >> 8) & 0xFF,
@@ -844,6 +871,27 @@ esp_err_t lora_ping(uint8_t target_node_id, uint32_t timeout_ms)
 void lora_set_node_id(uint8_t node_id)
 {
     local_node_id = node_id;
+}
+
+void lora_debug_check(const char *wo)
+{
+    if (!lora_initialized) {
+        return;
+    }
+
+    /* Versionsregister lesen: kommt "SX12" heraus, antwortet der Chip auf
+     * Kommandos. Kommen nur Statusbytes (0xB2), ist er ausgestiegen. */
+    char version[5];
+    for (int i = 0; i < 4; i++) {
+        version[i] = (char)sx1262_read_reg(0x0320 + i);
+    }
+    version[4] = '\0';
+
+    uint8_t err[2] = { 0, 0 };
+    sx1262_cmd_read_buf(SX1262_CMD_GET_DEVICE_ERRORS, err, 2);
+
+    ESP_LOGI(TAG, "Pruefung %s: Version '%s', Fehler 0x%02X%02X",
+             wo, version, err[0], err[1]);
 }
 
 uint8_t lora_get_node_id(void)
