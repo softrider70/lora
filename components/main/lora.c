@@ -99,7 +99,10 @@ static uint8_t s_tcxo_stufe = 0x02;   /* 0x02 = 1,8 V (Heltec Vorgabe) */
 /* Messtest fuer den Oszillator: schaltet die DIO3-Versorgung im Sekundentakt
  * ein und aus. Am Vcc-Pad des 4-poligen Oszillators muss dann ein Rechteck
  * zwischen 0 V und etwa 1,8 V zu sehen sein. 0 = Test aus. */
-#define LORA_TCXO_MESSTEST   6
+#define LORA_TCXO_MESSTEST   20
+
+/* Dauer einer Phase im Messtest. 200 ms passen zu 100 ms/Teil am Oszilloskop. */
+#define LORA_MESSTEST_PHASE_MS  200
 
 /* ====================================================================
  * SPI/GPI/O Hilfsfunktionen
@@ -517,19 +520,19 @@ esp_err_t lora_init(void)
         gpio_set_level(LORA_RST_GPIO, 0);
         vTaskDelay(pdMS_TO_TICKS(10));
         gpio_set_level(LORA_RST_GPIO, 1);
-        vTaskDelay(pdMS_TO_TICKS(900));
+        vTaskDelay(pdMS_TO_TICKS(LORA_MESSTEST_PHASE_MS));
         ESP_LOGW(TAG, "Messtest %d Phase aus: 0 V erwartet", i + 1);
 
         /* Phase 2: 1,8 V */
         uint8_t tcxo_test[4] = { 0x02, 0x00, 0x06, 0x40 };
         sx1262_cmd_write_buf(SX1262_CMD_SET_DIO3_AS_TCXO_CTRL, tcxo_test, 4);
-        vTaskDelay(pdMS_TO_TICKS(900));
+        vTaskDelay(pdMS_TO_TICKS(LORA_MESSTEST_PHASE_MS));
         ESP_LOGW(TAG, "Messtest %d Phase 1,8 V", i + 1);
 
         /* Phase 3: 3,3 V (hoechste Stufe) */
         tcxo_test[0] = 0x07;
         sx1262_cmd_write_buf(SX1262_CMD_SET_DIO3_AS_TCXO_CTRL, tcxo_test, 4);
-        vTaskDelay(pdMS_TO_TICKS(900));
+        vTaskDelay(pdMS_TO_TICKS(LORA_MESSTEST_PHASE_MS));
         ESP_LOGW(TAG, "Messtest %d Phase 3,3 V", i + 1);
     }
 
