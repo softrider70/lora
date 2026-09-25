@@ -513,17 +513,24 @@ esp_err_t lora_init(void)
      * (0 V), mit SetDio3AsTcxoCtrl liegen 1,8 V an. Ein Reset loescht die
      * Konfiguration wieder, damit entsteht ein Rechteck fuer das Oszilloskop. */
     for (int i = 0; i < LORA_TCXO_MESSTEST; i++) {
+        /* Phase 1: aus (Reset loescht die TCXO-Konfiguration) */
         gpio_set_level(LORA_RST_GPIO, 0);
         vTaskDelay(pdMS_TO_TICKS(10));
         gpio_set_level(LORA_RST_GPIO, 1);
         vTaskDelay(pdMS_TO_TICKS(900));
-        ESP_LOGW(TAG, "Messtest %d: DIO3 AUS - am Oszillator 0 V erwartet", i + 1);
+        ESP_LOGW(TAG, "Messtest %d Phase aus: 0 V erwartet", i + 1);
 
-        uint8_t tcxo_test[4] = { s_tcxo_stufe, 0x00, 0x06, 0x40 };
+        /* Phase 2: 1,8 V */
+        uint8_t tcxo_test[4] = { 0x02, 0x00, 0x06, 0x40 };
         sx1262_cmd_write_buf(SX1262_CMD_SET_DIO3_AS_TCXO_CTRL, tcxo_test, 4);
         vTaskDelay(pdMS_TO_TICKS(900));
-        ESP_LOGW(TAG, "Messtest %d: DIO3 EIN - am Oszillator %s erwartet",
-                 i + 1, (s_tcxo_stufe == 0x02) ? "1,8 V" : "Spannung der Stufe");
+        ESP_LOGW(TAG, "Messtest %d Phase 1,8 V", i + 1);
+
+        /* Phase 3: 3,3 V (hoechste Stufe) */
+        tcxo_test[0] = 0x07;
+        sx1262_cmd_write_buf(SX1262_CMD_SET_DIO3_AS_TCXO_CTRL, tcxo_test, 4);
+        vTaskDelay(pdMS_TO_TICKS(900));
+        ESP_LOGW(TAG, "Messtest %d Phase 3,3 V", i + 1);
     }
 
     /* Zurueck in den Normalzustand */
