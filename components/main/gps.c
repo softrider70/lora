@@ -134,6 +134,7 @@ static void parse_gga(char *fields[], int count)
     xSemaphoreTake(s_mutex, portMAX_DELAY);
 
     s_data.sentences++;
+    s_data.quality = (quality > 0xFF) ? 0xFF : (uint8_t)quality;
     strncpy(s_data.utc_time, fields[1], sizeof(s_data.utc_time) - 1);
     s_data.utc_time[sizeof(s_data.utc_time) - 1] = '\0';
 
@@ -201,6 +202,7 @@ static void gps_task(void *arg)
     char line[NMEA_LINE_MAX];
     size_t line_len = 0;
     bool baud_locked = false;
+    int64_t last_status_us = 0;
 
     ESP_LOGI(TAG, "GPS-Task gestartet (RX=GPIO%d, TX=GPIO%d)",
              GPS_RX_GPIO, GPS_TX_GPIO);
@@ -252,6 +254,22 @@ static void gps_task(void *arg)
             } else {
                 ESP_LOGD(TAG, "Teste %lu Baud", (unsigned long)baud);
             }
+        }
+
+        /* Alle 10 s den Stand melden: Anzahl ausgewerteter Saetze, Fehler,
+         * Satelliten und Qualitaet. Damit ist belegbar, ob NMEA ankommt und ob
+         * der Empfaenger schon einen Fix hat. */
+        int64_t now_us = esp_timer_get_time();
+        if (now_us - last_status_us >= 10 * 1000 * 1000) {
+            last_status_us = now_us;
+
+            gps_data_t stand;
+            gps_get_data(&stand);
+            ESP_LOGI(TAG, "NMEA: %lu Saetze, %lu Fehler, Sat %u, Qual %u, HDOP %u.%u",
+                     (unsigned long)stand.sentences, (unsigned long)stand.errors,
+                     (unsigned)stand.satellites, (unsigned)stand.quality,
+                     (unsigned)((int)(stand.hdop * 10.0) / 10),
+                     (unsigned)((int)(stand.hdop * 10.0) % 10));
         }
     }
 }

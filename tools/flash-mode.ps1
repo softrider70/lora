@@ -1,8 +1,8 @@
 param(
     [ValidateSet('usb','ota','last','beide')]
     [string]$Mode = 'last',
-    [string]$UsbPort = 'COM3',          # Sensor-Node mit GPS
-    [string]$UsbPort2 = 'COM8',         # Anzeige-Node ohne GPS
+    [string]$UsbPort = 'COM8',          # Sensor-Node mit GPS
+    [string]$UsbPort2 = 'COM3',         # Anzeige-Node ohne GPS
     [string]$OtaUrl = 'http://lora-node.local:8080/update'
 )
 
@@ -67,7 +67,7 @@ if ($Mode -eq 'usb') {
         Write-Host "USB Flash erfolgreich" -ForegroundColor Green
     }
 } elseif ($Mode -eq 'beide') {
-    # Sensor-Node und Anzeige-Node nacheinander flashen
+    # Sensor-Node (mit GPS) und Anzeige-Node nacheinander flashen
     $ok1 = Flash-UsbPort $UsbPort
     $ok2 = Flash-UsbPort $UsbPort2
     if ($ok1 -and $ok2) {

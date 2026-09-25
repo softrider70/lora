@@ -315,6 +315,20 @@ esp_err_t display_init(void)
     ESP_LOGI(TAG, "Vext (GPIO%d) eingeschaltet", DISPLAY_VEXT_GPIO);
     vTaskDelay(pdMS_TO_TICKS(50));
 
+    /* OLED-Reset freigeben. Bleibt RST offen, haelt der SSD1306 den Reset und
+     * antwortet nicht auf seiner I2C-Adresse (ESP_ERR_INVALID_RESPONSE). */
+    gpio_config_t rst = {
+        .pin_bit_mask = (1ULL << DISPLAY_RST_GPIO),
+        .mode = GPIO_MODE_OUTPUT,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&rst);
+    gpio_set_level(DISPLAY_RST_GPIO, 0);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    gpio_set_level(DISPLAY_RST_GPIO, 1);
+    ESP_LOGI(TAG, "OLED-Reset (GPIO%d) freigegeben", DISPLAY_RST_GPIO);
+    vTaskDelay(pdMS_TO_TICKS(50));
+
     ESP_LOGI(TAG, "Initialisiere I2C (SDA=%d, SCL=%d, Freq=%d Hz)",
              DISPLAY_SDA_GPIO, DISPLAY_SCL_GPIO, DISPLAY_I2C_FREQ);
 

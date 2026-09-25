@@ -4,8 +4,8 @@ Zwei **Heltec WiFi LoRa 32 V3** (ESP32-S3 + SX1262) tauschen über LoRa Nachrich
 aus. Ein Board bekommt ein **GPS-Modul (GY-NE06MV2, u-blox NEO-6M)** und sendet
 seine Position; beide Boards zeigen die Position auf dem OLED an.
 
-- **Sensor-Node** (mit GPS): COM3
-- **Anzeige-Node** (ohne GPS): COM8
+- **Sensor-Node** (mit GPS): COM8
+- **Anzeige-Node** (ohne GPS): COM3
 
 Beide Boards laufen mit **derselben Firmware**. Ob ein Fix vorliegt, erkennt das
 Board selbst — ohne GPS sendet es nur ein Lebenszeichen (Status).
@@ -77,17 +77,17 @@ Fix vorliegt.
 . .\activate-esp-idf.ps1
 idf.py build
 
-# Sensor-Node (COM3)
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\flash-mode.ps1 -Mode usb -UsbPort COM3
+# Sensor-Node (COM8, mit GPS)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\flash-mode.ps1 -Mode usb -UsbPort COM8
 
-# Beide Boards nacheinander (COM3 und COM8)
+# Beide Boards nacheinander (COM8 = Sensor, COM3 = Anzeige)
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\flash-mode.ps1 -Mode beide
 
 # OTA (nach dem ersten USB-Flash)
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\flash-mode.ps1 -Mode ota
 
-# Monitor
-idf.py -p COM3 monitor
+# Monitor des Sensor-Nodes
+idf.py -p COM8 monitor
 ```
 
 Das Flash-Skript prüft, ob der Port wirklich angeschlossen ist (PnP-Status OK),
@@ -136,7 +136,10 @@ lora/
 
 ## Bekannte Befunde (gemessen, nicht vermutet)
 
-Alles am 2026-09-25 am Board auf COM3 (Build 8–10) aus dem Log belegt:
+Alles am 2026-09-25 aus den Logs der beiden Boards belegt (Build 8–17). Die MAC
+`70:AF:09:xx:xx:xx` (Node-ID 217) gehört dem Board, das jetzt als **Anzeige-Node
+auf COM3** hängt, die MAC `70:AF:09:xx:xx:xx` (Node-ID 9) dem **Sensor-Node auf
+COM8**.
 
 - **Button-Task hatte 1024 Byte Stack** → „A stack overflow in task button",
   das Board startete in einer Schleife neu. Ebenso `stk_mon` und `display`.
@@ -144,13 +147,19 @@ Alles am 2026-09-25 am Board auf COM3 (Build 8–10) aus dem Log belegt:
   Bytes, nicht Wörter. Jetzt: 4096 / 3072 / 4096. Seitdem kein Neustart mehr.
 - **OTA-Server auf Port 80** startete nicht („error in listen (112)"), weil das
   Captive Portal Port 80 und Steuerport 32768 belegt. Jetzt 8080 / 32769.
-- **OLED antwortet nicht**: `SSD1306-Init fehlgeschlagen:
-  ESP_ERR_INVALID_RESPONSE`. Der I2C-Scan findet auf GPIO17/18 **und** auf
-  GPIO41/42 keinen Chip (0x08–0x77). Das Display war vorher auf GPIO41/42
-  konfiguriert; das sind beim ESP32-S3 die JTAG-Pins MTDI/MTMS. Auf beiden
-  Paaren antwortet nichts — das deutet auf ein fehlendes oder nicht versorgtes
-  Display an diesem Board hin. Das nächste Einschalten zeigt im Log die
-  Ruhepegel der Leitungen („Ruhepegel SDA=1 SCL=1" = Bus frei, Gerät fehlt).
+- **OLED antwortete nicht** (`ESP_ERR_INVALID_RESPONSE`, auf beiden Boards).
+  Ursache war nicht die Adresse, sondern der **Reset**: der SSD1306 hängt an
+  GPIO21 und blieb ohne Freigabe im Reset; zusätzlich fehlte die Versorgung über
+  **Vext (GPIO36, LOW = ein)**. Seit beidem steht im Log
+  `Display initialisiert (128x64, I2C Addr 0x3C)` — auf beiden Boards. Die
+  ursprünglich konfigurierten GPIO41/42 waren falsch (JTAG-Pins MTDI/MTMS),
+  richtig sind GPIO17 (SDA) / GPIO18 (SCL).
 
-Die LoRa-Übertragung selbst läuft: der Sensor-Node sendet alle 5 s
+Die Funkübertragung läuft: beide Nodes senden alle 5 s
 (`Kein GPS-Fix - sende Status #2`, SX1262 initialisiert mit 868 MHz/SF7).
+
+Der GPS-Empfänger liefert NMEA (`NMEA-Empfang bei 9600 Baud`, 0 Prüfsummenfehler),
+hatte drinnen aber noch keinen Fix: `Sat 0, Qual 0, HDOP 99.9`. Qual 0 heißt laut
+NMEA ausdrücklich „kein Fix" — das Modul braucht freie Sicht zum Himmel. Der
+GPS-Task meldet diesen Stand alle 10 s, damit man den Unterschied zwischen
+„kein Empfang" und „Empfang, aber kein Fix" im Log sieht.

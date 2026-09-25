@@ -30,6 +30,7 @@ typedef struct {
     double longitude;       /* Grad, positiv = Ost */
     double altitude_m;      /* Hoehe ueber NN in Metern */
     uint8_t satellites;     /* Anzahl benutzter Satelliten */
+    uint8_t quality;        /* GGA-Qualitaet: 0 = kein Fix, 1 = GPS, 2 = DGPS */
     double hdop;            /* Guete der horizontalen Position */
     char utc_time[11];      /* UTC-Zeit aus NMEA, z. B. "123456.00" */
     uint32_t fix_age_ms;    /* Alter des letzten gueltigen Fix in ms */

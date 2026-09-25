@@ -5,5 +5,5 @@
     "--query-driver=**"
   ],
   "idf.currentSetup": "C:\\Users\\user\\Downloads\\GitHub\\VS-Projekte\\CascadeProjects\\esp-idf",
-  "idf.port": "COM3"
+  "idf.port": "COM8"
 }
