@@ -47,6 +47,7 @@ static const char *TAG = "LORA";
 #define SX1262_CMD_CALIBRATE_IMAGE       0x98
 #define SX1262_CMD_CLEAR_DEVICE_ERRORS   0x07
 #define SX1262_CMD_GET_DEVICE_ERRORS     0x17
+#define SX1262_CMD_SET_REGULATOR_MODE    0x96
 #define SX1262_CMD_WRITE_REGISTER        0x0D
 #define SX1262_CMD_READ_REGISTER         0x1D
 #define SX1262_CMD_WRITE_BUFFER          0x0E
@@ -376,6 +377,67 @@ static void dio1_event_task(void *arg)
  * Oeffentliche API
  * ==================================================================== */
 
+/* Vollstaendige Konfiguration des Funkteils. Wird beim Init und noch einmal
+ * nach einem frischen Reset angewendet: manche Module uebernehmen die
+ * Oszillator-Konfiguration erst dann. Enthaelt auch die DIO1-Maske, weil ein
+ * Reset sie loeschen wuerde. */
+static void sx1262_config_lora(void)
+{
+    sx1262_cmd_write_byte(SX1262_CMD_SET_STANDBY, 0x00);
+    sx1262_cmd_write_byte(SX1262_CMD_SET_PACKETTYPE, 0x01);
+
+    uint32_t frf = (uint32_t)((double)LORA_FREQUENCY / 15625.0);
+    uint8_t rf[4] = { (frf >> 24) & 0xFF, (frf >> 16) & 0xFF,
+                      (frf >> 8) & 0xFF, frf & 0xFF };
+    sx1262_cmd_write_buf(SX1262_CMD_SET_RFFREQUENCY, rf, 4);
+
+    /* Bild-Kalibrierung fuer 863-870 MHz (Kommando 0x98) und alle
+     * Kalibrierbloecke (0x89). */
+    uint8_t cal_img[2] = { 0xD7, 0xDB };
+    sx1262_cmd_write_buf(SX1262_CMD_CALIBRATE_IMAGE, cal_img, 2);
+    vTaskDelay(pdMS_TO_TICKS(5));
+    uint8_t cal_all = 0x7F;
+    sx1262_cmd_write_buf(SX1262_CMD_CALIBRATE, &cal_all, 1);
+    vTaskDelay(pdMS_TO_TICKS(20));
+
+    /* PA-Konfiguration der SX1261 (Versionsregister meldet SX1261 V2D). */
+    uint8_t pa_cfg[4] = { 0x04, 0x00, 0x01, 0x01 };
+    sx1262_cmd_write_buf(SX1262_CMD_SET_PAOCONFIG, pa_cfg, 4);
+
+    uint8_t txp[] = { LORA_TX_POWER, 0x02 };
+    sx1262_cmd_write_buf(SX1262_CMD_SET_TXPARAMS, txp, 2);
+
+    uint8_t modparams[] = { LORA_SF, 0x05, LORA_CR_4_5, 0x00 };  /* BW 125 kHz */
+    sx1262_cmd_write_buf(SX1262_CMD_SET_LORAMODPARAMS, modparams, 4);
+
+    uint8_t pktparams[] = { 0x00, LORA_PREAMBLE_LENGTH, 0x00,
+                            LORA_MAX_PAYLOAD_LEN, 0x01, 0x00 };
+    sx1262_cmd_write_buf(SX1262_CMD_SET_LORAPKTPARAMS, pktparams, 6);
+
+    sx1262_write_reg(SX1262_REG_LORA_SYNCWORD, 0x14);
+    sx1262_write_reg(SX1262_REG_LORA_SYNCWORD + 1, 0x24);
+
+    /* DIO2 steuert den HF-Umschalter. */
+    sx1262_cmd_write_byte(SX1262_CMD_SET_DIO2_AS_RF_SWITCH, 0x01);
+
+    /* Regler auf DC-DC (0x02). Die Referenz setzt das ebenfalls; im LDO-Betrieb
+     * bekommt die Sendeendstufe weniger Strom. */
+    sx1262_cmd_write_byte(SX1262_CMD_SET_REGULATOR_MODE, 0x02);
+
+    /* DIO1-Maske: global UND auf DIO1 (Reihenfolge: global, dio1, dio2, dio3). */
+    uint8_t dio_irq[8] = {
+        (SX1262_IRQ_ALL >> 8) & 0xFF, SX1262_IRQ_ALL & 0xFF,
+        (SX1262_IRQ_ALL >> 8) & 0xFF, SX1262_IRQ_ALL & 0xFF,
+        0x00, 0x00,
+        0x00, 0x00,
+    };
+    sx1262_cmd_write_buf(SX1262_CMD_SET_DIOIRQPARAMS, dio_irq, 8);
+
+    sx1262_cmd(SX1262_CMD_CLEAR_DEVICE_ERRORS);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    sx1262_log_device_errors("nach der Konfiguration");
+}
+
 esp_err_t lora_init(void)
 {
     if (lora_initialized) return ESP_OK;
@@ -485,6 +547,9 @@ esp_err_t lora_init(void)
     }
     version[16] = '\0';
     ESP_LOGI(TAG, "Chip-Version: %s", version);
+
+    /* Komplette Konfiguration anwenden (inkl. Regler-Modus und DIO1-Maske). */
+    sx1262_config_lora();
 
     /* Packet-Typ: LoRa */
     sx1262_cmd_write_byte(SX1262_CMD_SET_PACKETTYPE, 0x01);
@@ -617,6 +682,22 @@ esp_err_t lora_init(void)
      * Ordnung und ein spaeterer Ausfall liegt an der laufenden Anlage (z. B.
      * Versorgung). Klappt sie schon hier nicht, liegt es an der Konfiguration
      * des Chips. */
+    /* Zweiter Anlauf mit frischem Reset: manche Module uebernehmen die
+     * Oszillator-Konfiguration erst nach einem Reset, der auf das Setzen folgt.
+     * Danach die komplette Konfiguration erneut anwenden (der Reset loescht sie
+     * samt DIO1-Maske). */
+    gpio_set_level(LORA_RST_GPIO, 0);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    gpio_set_level(LORA_RST_GPIO, 1);
+    vTaskDelay(pdMS_TO_TICKS(30));
+    if (wait_on_busy(100) != ESP_OK) {
+        ESP_LOGW(TAG, "Chip nach dem zweiten Reset nicht bereit");
+    }
+    uint8_t tcxo_zweit[4] = { s_tcxo_stufe, 0x00, 0x06, 0x40 };
+    sx1262_cmd_write_buf(SX1262_CMD_SET_DIO3_AS_TCXO_CTRL, tcxo_zweit, 4);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    sx1262_config_lora();
+
     lora_message_t test_msg;
     memset(&test_msg, 0, sizeof(test_msg));
     test_msg.type = LORA_MSG_TYPE_STATUS;

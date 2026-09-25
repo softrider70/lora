@@ -136,6 +136,15 @@ GPIO3/45/46 sind Strapping-Pins und für externe Signale ungeeignet.
      (Version liest `0xB2`), vorher exakt (`SX12`).
    - Nächste Versuche: `SetRegulatorMode` auf DC-DC, XTA/XTB-Trim für
      TCXO-Betrieb, Reset + vollständige Neu-Konfiguration vor dem ersten Senden.
+   - **Ebenfalls ohne Wirkung (Build 71):** `SetRegulatorMode` DC-DC und
+     Reset + komplette Neu-Konfiguration unmittelbar vor dem Senden.
+     `XOSC_START | PLL_LOCK` bleibt in jeder Phase stehen (Init, nach der
+     Konfiguration, vor dem Empfang, beim Senden).
+     **Damit ausgeschlossen:** TCXO-Spannungsstufe (9 Stufen), SPI-Takt (2/8 MHz),
+     Versorgungslage (ruhiges System vs. laufende Anlage), Regler-Modus,
+     Reihenfolge/Reset, Kalibrier-Kommandos, PA-Konfiguration.
+     Es bleibt der **XTA/XTB-Trim** (Werte nicht geraten) oder die
+     Oszillator-Beschaltung des Moduls selbst.
    - **GPS ist dagegen bewiesen** (Build 60, Board COM8): `Sat 8, Qual 1,
      HDOP 1.6` und `Sende Position #0 (8 Sat)` — NMEA, Parser, Fix und
      Nutzlast-Aufbau funktionieren.
