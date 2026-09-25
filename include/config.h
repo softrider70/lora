@@ -69,6 +69,9 @@ extern "C" {
 
 /* =====================================================================
  * LED (Heltec V3 Board-LED)
+ * Die Ansteuerung ist stillgelegt (2026-09-25): Der Pin wird nur noch als
+ * Ausgang auf LED_OFF gehalten, die LED bleibt aus. Vorher leuchtete sie
+ * dauerhaft, weil der Blink-Timer nie neu gestartet wurde.
  * ===================================================================== */
 #define LED_GPIO                35
 #define LED_ON                  1

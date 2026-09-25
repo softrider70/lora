@@ -73,12 +73,17 @@ nicht als cp1252 ausgeben (`UnicodeEncodeError`).
 | LoRa SX1262 | SCK9, MISO11, MOSI10, NSS8, RST12, BUSY13, DIO1 14 |
 | GPS NEO-6M | TX→GPIO4 (ESP-RX), RX→GPIO5 (ESP-TX) |
 | Konsole UART0 | GPIO43/44 über CP2102 |
-| LED / Taster | GPIO35 / GPIO0 |
+| LED (stillgelegt, aus) / Taster | GPIO35 / GPIO0 |
 | OLED | SDA 17 / SCL 18 (intern), RST 21, Versorgung Vext 36 (LOW = ein) |
 | frei | GPIO1–7, 38, 45–48 |
 | belegt intern | Flash 26–32 |
 
 GPIO3/45/46 sind Strapping-Pins und für externe Signale ungeeignet.
+
+Die weisse Board-LED (GPIO35) ist **stillgelegt und bleibt aus** (Build 125):
+Der Code schaltete sie bei jedem Empfang ein, der Blink-Timer lief aber nur
+einmal beim Start - dadurch leuchtete sie dauerhaft. GPIO35 wird nur noch als
+Ausgang auf LOW gehalten.
 
 ## Bekannte Fehler und ihre Ursachen (alle gemessen)
 

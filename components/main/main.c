@@ -43,9 +43,6 @@ static TaskHandle_t button_task_handle = NULL;
 /* Eigene Node-ID */
 static uint8_t node_id = 1;
 
-/* LED-Blink-Status */
-static bool led_state = false;
-
 /* Letzte empfangene Nachricht (fuer Display) */
 static lora_message_t last_rx_msg;
 static bool last_rx_valid = false;
@@ -153,10 +150,6 @@ static void lora_rx_callback_handler(const lora_message_t *msg)
                      msg->node_id, coord, (unsigned)g_last_rx_gps.satellites);
         }
     }
-
-    /* LED kurz einschalten */
-    led_state = true;
-    gpio_set_level(LED_GPIO, LED_ON);
 
     /* Button: auf PING mit PONG antworten */
     if (msg->type == LORA_MSG_TYPE_PING) {
@@ -364,18 +357,6 @@ static void button_task(void *arg)
 }
 
 /* ====================================================================
- * LED-Blink-Timer
- * ==================================================================== */
-
-static void led_timer_callback(TimerHandle_t xTimer)
-{
-    if (led_state) {
-        gpio_set_level(LED_GPIO, LED_OFF);
-        led_state = false;
-    }
-}
-
-/* ====================================================================
  * app_main
  * ==================================================================== */
 
@@ -385,6 +366,9 @@ void app_main(void)
     ESP_LOGI(TAG, "Board: %s (%s)", BOARD_NAME, BOARD_CHIP);
     ESP_LOGI(TAG, "Build %d vom %s", BUILD_NUMBER, BUILD_TIMESTAMP);
 
+    /* LED aus: GPIO35 als Ausgang auf LOW halten. (Frueher wurde sie bei
+     * jedem Empfang eingeschaltet, aber der Blink-Timer lief nur einmal -
+     * dadurch blieb sie dauerhaft an. Auf Wunsch stillgelegt.) */
     gpio_config_t led_conf = {
         .pin_bit_mask = (1ULL << LED_GPIO),
         .mode = GPIO_MODE_OUTPUT,
@@ -453,12 +437,6 @@ void app_main(void)
     heap_monitor_init();
     stack_monitor_init();
 
-    TimerHandle_t led_timer = xTimerCreate(
-        "led_blink", pdMS_TO_TICKS(100), pdFALSE, NULL, led_timer_callback);
-    if (led_timer) {
-        xTimerStart(led_timer, 0);
-    }
-
     xTaskCreatePinnedToCore(
         lora_task, "lora", TASK_STACK_LORA, NULL,
         TASK_PRIORITY_LORA, &lora_task_handle, 1);
@@ -473,8 +451,7 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Initialisierung abgeschlossen");
 
-    gpio_set_level(LED_GPIO, LED_ON);
-    vTaskDelay(pdMS_TO_TICKS(200));
+    /* LED bleibt aus (siehe Kommentar am LED-Init oben) */
     gpio_set_level(LED_GPIO, LED_OFF);
 
     /* Bewusst die letzte Meldung: zeigt im Log den laufenden Stand */
