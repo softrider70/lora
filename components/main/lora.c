@@ -60,6 +60,17 @@ static const char *TAG = "LORA";
 #define SX1262_REG_TX_CLAMP_CURRENT      0x08D8
 #define SX1262_REG_OCP_CONFIG            0x08E7
 
+/* DIOx-Register (Adressen und Bedeutung aus RadioLib, SX126x_registers.h).
+ * DIO3 liefert die TCXO-Spannung; Bit 3 gehoert jeweils zu DIO3.
+ * 0x0580 DIOX_OUT_ENABLE ist invertiert: Bit = 1 schaltet den Ausgang AB.
+ * 0x0583 DIOX_IN_ENABLE ist normal: Bit = 1 schaltet den Eingang EIN. */
+#define SX1262_REG_DIOX_OUT_ENABLE       0x0580
+#define SX1262_REG_DIOX_DRIVE_STRENGTH   0x0582
+#define SX1262_REG_DIOX_IN_ENABLE        0x0583
+#define SX1262_REG_DIOX_PULL_UP_CTRL     0x0584
+#define SX1262_REG_DIOX_PULL_DOWN_CTRL   0x0585
+#define SX1262_DIO3_BIT                  0x08
+
 /* Interrupt-Masken */
 #define SX1262_IRQ_TX_DONE               (1 << 0)
 #define SX1262_IRQ_RX_DONE               (1 << 1)
@@ -96,13 +107,11 @@ static volatile bool rx_enabled = false;
  * Empfang noch einmal gesetzt. */
 static uint8_t s_tcxo_stufe = 0x02;   /* 0x02 = 1,8 V (Heltec Vorgabe) */
 
-/* Messtest fuer den Oszillator: schaltet die DIO3-Versorgung im Sekundentakt
- * ein und aus. Am Vcc-Pad des 4-poligen Oszillators muss dann ein Rechteck
- * zwischen 0 V und etwa 1,8 V zu sehen sein. 0 = Test aus. */
+/* Messtest fuer den Oszillator: schaltet die DIO3-Versorgung im Wechsel ein und
+ * aus und probiert dabei vier Register-Zustaende durch (siehe lora_init). Am
+ * Vcc-Pad des 4-poligen Oszillators muss ein Rechteck zwischen 0 V und etwa
+ * 1,8 V zu sehen sein. 0 = Test aus. */
 #define LORA_TCXO_MESSTEST   20
-
-/* Dauer einer Phase im Messtest. 200 ms passen zu 100 ms/Teil am Oszilloskop. */
-#define LORA_MESSTEST_PHASE_MS  200
 
 /* ====================================================================
  * SPI/GPI/O Hilfsfunktionen
@@ -294,6 +303,20 @@ static void sx1262_dump_reg(uint16_t addr, int anzahl)
     gpio_set_level(LORA_NSS_GPIO, 1);
 
     ESP_LOGI(TAG, "Reg 0x%04X (%d Byte): %s", addr, anzahl, zeile);
+}
+
+/* DIO3 fuer den Paketmodus vorbereiten: Eingang aus, Ausgang an. Genau das
+ * macht RadioLib beim Wechsel zurueck in den Paketmodus (SX126x.cpp,
+ * packetMode()) und zwar BEVOR die TCXO-Spannung gesetzt wird. Ohne diese
+ * Vorbereitung koennen Digitalausgang und TCXO-Regler am Pin gegeneinander
+ * arbeiten - das passt zu den gemessenen 380 mV statt 1,8 V.
+ * Achtung: 0x0580 ist invertiert, Bit 3 = 0 heisst dort "Ausgang ein". */
+static void sx1262_dio3_paketmodus(void)
+{
+    sx1262_write_reg(SX1262_REG_DIOX_IN_ENABLE,
+                     sx1262_read_reg(SX1262_REG_DIOX_IN_ENABLE) & ~SX1262_DIO3_BIT);
+    sx1262_write_reg(SX1262_REG_DIOX_OUT_ENABLE,
+                     sx1262_read_reg(SX1262_REG_DIOX_OUT_ENABLE) & ~SX1262_DIO3_BIT);
 }
 
 /* ====================================================================
@@ -512,23 +535,88 @@ esp_err_t lora_init(void)
     }
 
 #if LORA_TCXO_MESSTEST > 0
-    /* Messung am Oszillator vorbereiten: ohne Konfiguration ist DIO3 aus
-     * (0 V), mit SetDio3AsTcxoCtrl liegen 1,8 V an. Ein Reset loescht die
-     * Konfiguration wieder, damit entsteht ein Rechteck fuer das Oszilloskop. */
-    /* Dauerhafter Suchimpuls zum Auffinden des Pins: 200 ms DIO3 an (1,8 V),
-     * 100 ms aus. Laeuft endlos, die restliche Anwendung startet dabei nicht.
+    /* DIO3-Registertest: Jede Runde startet mit einem Reset (DIO3 aus), dann
+     * wird EIN Register-Zustand gesetzt und erst danach das TCXO-Kommando
+     * gesendet. Anschliessend wirft CALIBRATE die Referenz an; das Fehler-
+     * register zeigt, ob der Oszillator laeuft (0x0000 = laeuft, 0x0020 =
+     * XOSC_START, 0x0040 = PLL_LOCK). Vier Varianten im Wechsel, damit lassen
+     * sich Registerzustand, Pegel am Oszilloskop und Fehlerwert vergleichen.
+     * Laeuft endlos, die restliche Anwendung startet dabei nicht.
      * Zum Abschalten LORA_TCXO_MESSTEST auf 0 setzen und neu flashen. */
-    ESP_LOGW(TAG, "Suchimpuls aktiv: 200 ms an, 100 ms aus - dauerhaft");
+    ESP_LOGW(TAG, "DIO3-Registertest aktiv: 4 Varianten im Wechsel, dauerhaft");
+    int dio3_variante = 0;
     while (1) {
-        uint8_t tcxo_puls[4] = { 0x02, 0x00, 0x06, 0x40 };
-        sx1262_cmd_write_buf(SX1262_CMD_SET_DIO3_AS_TCXO_CTRL, tcxo_puls, 4);
-        vTaskDelay(pdMS_TO_TICKS(200));
-
-        /* Aus: ein Reset loescht die TCXO-Konfiguration */
+        /* Aus: ein Reset loescht die TCXO-Konfiguration und setzt die
+         * DIOx-Register auf den Auslieferungszustand zurueck. */
         gpio_set_level(LORA_RST_GPIO, 0);
         vTaskDelay(pdMS_TO_TICKS(10));
         gpio_set_level(LORA_RST_GPIO, 1);
-        vTaskDelay(pdMS_TO_TICKS(90));
+        vTaskDelay(pdMS_TO_TICKS(30));
+        (void)wait_on_busy(100);
+        sx1262_cmd_write_byte(SX1262_CMD_SET_STANDBY, 0x00);
+        vTaskDelay(pdMS_TO_TICKS(150));
+
+        uint8_t diox_out = sx1262_read_reg(SX1262_REG_DIOX_OUT_ENABLE);
+        uint8_t diox_drv = sx1262_read_reg(SX1262_REG_DIOX_DRIVE_STRENGTH);
+        uint8_t diox_in = sx1262_read_reg(SX1262_REG_DIOX_IN_ENABLE);
+        uint8_t pull_up = sx1262_read_reg(SX1262_REG_DIOX_PULL_UP_CTRL);
+        uint8_t pull_dn = sx1262_read_reg(SX1262_REG_DIOX_PULL_DOWN_CTRL);
+        const char *variante;
+
+        switch (dio3_variante) {
+        case 0:
+            /* Vergleichswert: nichts aendern, nur TCXO setzen */
+            variante = "0 unveraendert";
+            break;
+        case 1:
+            /* RadioLib-Paketmodus (SX126x.cpp, packetMode): beide Bits 0.
+             * 0x0580 ist invertiert, Bit 3 = 0 heisst dort "Ausgang ein". */
+            variante = "A Paketmodus (OUT=0 IN=0)";
+            sx1262_write_reg(SX1262_REG_DIOX_IN_ENABLE, diox_in & ~SX1262_DIO3_BIT);
+            sx1262_write_reg(SX1262_REG_DIOX_OUT_ENABLE, diox_out & ~SX1262_DIO3_BIT);
+            break;
+        case 2:
+            /* Digitalausgang am DIO3 abschalten */
+            variante = "B Ausgang aus (OUT Bit3=1)";
+            sx1262_write_reg(SX1262_REG_DIOX_OUT_ENABLE, diox_out | SX1262_DIO3_BIT);
+            sx1262_write_reg(SX1262_REG_DIOX_IN_ENABLE, diox_in & ~SX1262_DIO3_BIT);
+            break;
+        default:
+            /* Interne Pull-Widerstaende am DIO3 abschalten */
+            variante = "C Pulls aus (PU/PD Bit3=0)";
+            sx1262_write_reg(SX1262_REG_DIOX_PULL_UP_CTRL, pull_up & ~SX1262_DIO3_BIT);
+            sx1262_write_reg(SX1262_REG_DIOX_PULL_DOWN_CTRL, pull_dn & ~SX1262_DIO3_BIT);
+            break;
+        }
+
+        ESP_LOGW(TAG, "DIO3 %s: vorher  OUT=%02X DRV=%02X IN=%02X PU=%02X PD=%02X",
+                 variante, diox_out, diox_drv, diox_in, pull_up, pull_dn);
+        ESP_LOGW(TAG, "DIO3 %s: nachher OUT=%02X DRV=%02X IN=%02X PU=%02X PD=%02X",
+                 variante,
+                 sx1262_read_reg(SX1262_REG_DIOX_OUT_ENABLE),
+                 sx1262_read_reg(SX1262_REG_DIOX_DRIVE_STRENGTH),
+                 sx1262_read_reg(SX1262_REG_DIOX_IN_ENABLE),
+                 sx1262_read_reg(SX1262_REG_DIOX_PULL_UP_CTRL),
+                 sx1262_read_reg(SX1262_REG_DIOX_PULL_DOWN_CTRL));
+
+        /* TCXO an (1,8 V) - jetzt steht der Registerzustand */
+        uint8_t tcxo_puls[4] = { 0x02, 0x00, 0x06, 0x40 };
+        sx1262_cmd_write_buf(SX1262_CMD_SET_DIO3_AS_TCXO_CTRL, tcxo_puls, 4);
+        vTaskDelay(pdMS_TO_TICKS(50));
+
+        /* Referenz anwerfen und Fehlerregister lesen */
+        sx1262_cmd(SX1262_CMD_CLEAR_DEVICE_ERRORS);
+        uint8_t cal_stufe = 0x7F;
+        sx1262_cmd_write_buf(SX1262_CMD_CALIBRATE, &cal_stufe, 1);
+        vTaskDelay(pdMS_TO_TICKS(30));
+
+        uint8_t err[2] = { 0, 0 };
+        sx1262_cmd_read_buf(SX1262_CMD_GET_DEVICE_ERRORS, err, 2);
+        ESP_LOGW(TAG, "DIO3 %s -> Geraetefehler 0x%02X%02X", variante, err[0], err[1]);
+
+        /* Pegel fuer das Oszilloskop stehen lassen, dann naechste Variante */
+        vTaskDelay(pdMS_TO_TICKS(400));
+        dio3_variante = (dio3_variante + 1) % 4;
     }
 #endif
 
@@ -546,6 +634,8 @@ esp_err_t lora_init(void)
 
     for (unsigned i = 0; i < sizeof(tcxo_stufen); i++) {
         if (tcxo_stufen[i] != 0xFF) {
+            /* Erst die DIO3-Register in den Paketmodus, dann die Spannung. */
+            sx1262_dio3_paketmodus();
             uint8_t tcxo_cfg[4] = { tcxo_stufen[i], 0x00, 0x06, 0x40 };
             sx1262_cmd_write_buf(SX1262_CMD_SET_DIO3_AS_TCXO_CTRL, tcxo_cfg, 4);
         }
@@ -722,6 +812,8 @@ esp_err_t lora_init(void)
     if (wait_on_busy(100) != ESP_OK) {
         ESP_LOGW(TAG, "Chip nach dem zweiten Reset nicht bereit");
     }
+    /* Nach dem Reset zuerst die DIO3-Register, dann die Spannung setzen. */
+    sx1262_dio3_paketmodus();
     uint8_t tcxo_zweit[4] = { s_tcxo_stufe, 0x00, 0x06, 0x40 };
     sx1262_cmd_write_buf(SX1262_CMD_SET_DIO3_AS_TCXO_CTRL, tcxo_zweit, 4);
     vTaskDelay(pdMS_TO_TICKS(50));
@@ -890,6 +982,7 @@ esp_err_t lora_start_rx(void)
     /* TCXO hier erneut setzen: nach dem Reset verwirft der SX1262 oft die ersten
      * Kommandos. Bleibt die Referenz aus, meldet er XOSC_START und lehnt RX/TX
      * ab. Deshalb vor dem ersten Empfang nochmal setzen und pruefen. */
+    sx1262_dio3_paketmodus();
     uint8_t tcxo_cfg[4] = { s_tcxo_stufe, 0x00, 0x06, 0x40 };
     sx1262_cmd_write_buf(SX1262_CMD_SET_DIO3_AS_TCXO_CTRL, tcxo_cfg, 4);
     vTaskDelay(pdMS_TO_TICKS(50));

@@ -151,18 +151,32 @@ GPIO3/45/46 sind Strapping-Pins und für externe Signale ungeeignet.
      Spannungsstufe (1,8 V oder 3,3 V) ändert nichts. Der Pegel wird also
      festgehalten. Der Oszillator bekommt damit keine Versorgung und schwingt
      nicht an - das erklärt `XOSC_START` und die abgelehnten TX/RX-Kommandos.
-   - **Verdacht (noch offen, naechster Schritt):** DIO3 kann beim SX126x auch
-     ein normaler Digitalausgang sein. RadioLib loescht beim Zurueckkehren in den
-     Paketmodus ausdruecklich `REG_DIOX_OUT_ENABLE` Bit 3 und setzt
-     `REG_DIOX_IN_ENABLE` Bit 3. Sind beide Treiber aktiv, halten sie den Pin
-     gegeneinander - das ergaebe genau die gemessenen 380 mV auf allen Boards,
-     unabhaengig von der Spannungsstufe. Dazu die Registeradressen aus
-     RadioLibs `SX126x.h` holen (nicht raten), die Sequenz vor dem
-     TCXO-Kommando einbauen und erneut messen.
-   - **Messtest im Code:** `LORA_TCXO_MESSTEST` in `lora.c`. Aktuell als
-     Endlosschleife geflasht (200 ms DIO3 an, 100 ms aus, beide Boards:
-     COM3 Build 82, COM8 Build 84). Die restliche Anwendung startet in diesem
-     Modus nicht. Zum Abschalten den Wert auf 0 setzen und beide neu flashen.
+   - **DIO3-Register geprueft (Build 86/87, Verdacht widerlegt):** Adressen
+     aus RadioLibs `SX126x_registers.h` (nicht geraten): `DIOX_OUT_ENABLE`
+     0x0580 (**invertiert**: Bit 3 = 1 schaltet den Ausgang ab), `DIOX_IN_ENABLE`
+     0x0583 (Bit 3 = 1 schaltet den Eingang ein), dazu 0x0582 (Drive-Stärke),
+     0x0584/0x0585 (Pull-Up/Down). Befund aus dem Log, auf beiden Boards
+     gleich: Nach dem Reset stehen **alle** DIOx-Register auf `0x00`, also im
+     Zustand, den RadioLib im Paketmodus herstellt. Schreibzugriffe kommen an
+     (`0x0580` liest nach dem Test `0x08` zurueck), und das Fehlerregister
+     bleibt in **allen vier** Varianten `0x0020` (XOSC_START). Auch mit Bit 3
+     in beiden moeglichen Zustaenden (0 und 1) aendert sich nichts - egal wie
+     die Invertierung auszulegen ist. Weder Digitalausgang noch Pull-Widerstände
+     halten den Oszillator ab; die Register sind **nicht** die Ursache der
+     380 mV.
+   - **Messtest im Code:** `LORA_TCXO_MESSTEST` in `lora.c`. Stand Build 86
+     (COM8) / 87 (COM3): Registertest mit vier Varianten im Wechsel
+     (0 unveraendert, A RadioLib-Paketmodus, B Ausgang aus, C Pulls aus).
+     Je Runde: 150 ms aus (Reset), Register lesen/setzen, TCXO- und
+     Kalibrier-Kommando, Fehlerwort ins Log, dann rund 480 ms TCXO an.
+     Die restliche Anwendung startet in diesem Modus nicht. Zum Abschalten
+     den Wert auf 0 setzen und beide neu flashen.
+   - **Offen / naechster Schritt:** Die Oszilloskop-Messung gegenzaehlen
+     (Kanal auf **1 MOhm**, DC-Kopplung, 10:1-Tastkopf - bei 50 Ohm bricht
+     eine TCXO-Versorgung ein; die gemessenen 380 mV waeren an 50 Ohm rund
+     7,6 mA, das passt zu einem strombegrenzten Ausgang). Bleibt es bei
+     380 mV, kommen nur noch XTA/XTB-Trim (Werte nicht geraten) oder die
+     Oszillator-Beschaltung des Moduls in Frage.
    - **GPS ist dagegen bewiesen** (Build 60, Board COM8): `Sat 8, Qual 1,
      HDOP 1.6` und `Sende Position #0 (8 Sat)` — NMEA, Parser, Fix und
      Nutzlast-Aufbau funktionieren.
