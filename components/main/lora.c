@@ -43,7 +43,8 @@ static const char *TAG = "LORA";
 #define SX1262_CMD_SET_DIOIRQPARAMS      0x08
 #define SX1262_CMD_SET_DIO2_AS_RF_SWITCH 0x9D
 #define SX1262_CMD_SET_DIO3_AS_TCXO_CTRL 0x97
-#define SX1262_CMD_CALIBRATE_IMAGE       0x89
+#define SX1262_CMD_CALIBRATE             0x89
+#define SX1262_CMD_CALIBRATE_IMAGE       0x98
 #define SX1262_CMD_WRITE_REGISTER        0x0D
 #define SX1262_CMD_READ_REGISTER         0x1D
 #define SX1262_CMD_WRITE_BUFFER          0x0E
@@ -394,7 +395,11 @@ esp_err_t lora_init(void)
     ESP_ERROR_CHECK(spi_bus_initialize(LORA_SPI_HOST, &bus, SPI_DMA_CH_AUTO));
 
     spi_device_interface_config_t dev = {
-        .clock_speed_hz = 8 * 1000 * 1000,
+        /* Testweise 2 MHz statt 8 MHz: prueft, ob der SX1262 wegen Timing oder
+         * Signalqualitaet Kommandos verwirft (SetTx wurde nicht ausgefuehrt,
+         * obwohl Konfigurationskommandos ankamen). 8 MHz sind laut Datenblatt
+         * erlaubt, also waere ein Erfolg hier ein Hinweis auf die Verdrahtung. */
+        .clock_speed_hz = 2 * 1000 * 1000,
         .mode = 0,
         .spics_io_num = -1,
         .queue_size = 7,
@@ -433,11 +438,28 @@ esp_err_t lora_init(void)
     uint8_t rf[4] = { (frf >> 24) & 0xFF, (frf >> 16) & 0xFF, (frf >> 8) & 0xFF, frf & 0xFF };
     sx1262_cmd_write_buf(SX1262_CMD_SET_RFFREQUENCY, rf, 4);
 
-    /* Bild-Kalibrierung fuer das Band 863-870 MHz. Der SX1262 verlangt sie nach
-     * dem Setzen der Frequenz; die beiden Werte sind laut Datenblatt-Tabelle
-     * fuer dieses Band festgelegt (freq1 = 0xD7, freq2 = 0xDB). */
+    /* Alle Kalibrierbloecke (0x89, Maske 0x7F) und danach die Bild-Kalibrierung
+     * fuer das Band 863-870 MHz. ACHTUNG: Bild-Kalibrierung ist Kommando 0x98 -
+     * 0x89 ist das allgemeine Calibrate mit EINEM Byte. Vorher stand hier 0x89
+     * mit zwei Bytes, die noetige Bild-Kalibrierung fehlte also. */
+    uint8_t cal_all = 0x7F;
+    sx1262_cmd_write_buf(SX1262_CMD_CALIBRATE, &cal_all, 1);
+    vTaskDelay(pdMS_TO_TICKS(5));
+
     uint8_t cal_img[2] = { 0xD7, 0xDB };
     sx1262_cmd_write_buf(SX1262_CMD_CALIBRATE_IMAGE, cal_img, 2);
+
+    /* BUSY muss jetzt kurz auf 1 gehen (die Kalibrierung dauert einige ms).
+     * Bleibt die Leitung immer 0, ist sie nicht angeschlossen - dann werden alle
+     * weiteren Kommandos ohne Ruecksicht auf den Chipzustand getaktet und der
+     * Chip verwirft sie. */
+    char busy_probe[16];
+    int bp = 0;
+    for (int i = 0; i < 10; i++) {
+        bp += snprintf(busy_probe + bp, sizeof(busy_probe) - bp, "%d",
+                       gpio_get_level(LORA_BUSY_GPIO));
+    }
+    ESP_LOGI(TAG, "BUSY direkt nach CalibrateImage: %s", busy_probe);
     vTaskDelay(pdMS_TO_TICKS(10));
 
     /* PA-Konfiguration: SetPaConfig (0x95) braucht VIER Bytes:
@@ -599,15 +621,18 @@ esp_err_t lora_send(const lora_message_t *msg, uint32_t timeout_ms)
     sx1262_set_tx();
     ESP_LOGD(TAG, "Sende %u Bytes", raw_len);
 
-    /* Diagnose: 300 ms nach dem Start nachsehen, ob der Chip im Sendemodus ist
-     * (Status 0x6A = TX) und ob der Abschluss gemeldet wurde. */
-    vTaskDelay(pdMS_TO_TICKS(300));
-    uint8_t irq_dbg[2] = { 0, 0 };
-    uint8_t st_dbg = 0;
-    sx1262_cmd_read_buf(SX1262_CMD_GET_IRQSTATUS, irq_dbg, 2);
-    sx1262_cmd_read_buf(0xC0, &st_dbg, 1);
-    ESP_LOGI(TAG, "Nach SET_TX: IRQ 0x%02X%02X, Status 0x%02X, BUSY=%d",
-             irq_dbg[0], irq_dbg[1], st_dbg, gpio_get_level(LORA_BUSY_GPIO));
+    /* Diagnose: den Chipmodus direkt nach dem Start verfolgen (Modus 6 = TX,
+     * 5 = RX, 3 = Standby-XOSC). Nach 300 ms waere ein SendeVorgang mit SF7 und
+     * wenigen Byte laengst vorbei, deshalb im 5-ms-Raster messen. */
+    char moden[80];
+    int mp = 0;
+    for (int i = 0; i < 14; i++) {
+        uint8_t st_dbg = 0;
+        sx1262_cmd_read_buf(0xC0, &st_dbg, 1);
+        mp += snprintf(moden + mp, sizeof(moden) - mp, "%X", (st_dbg >> 4) & 0x07);
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    ESP_LOGI(TAG, "Chipmodus nach SET_TX (5-ms-Raster): %s", moden);
 
     xSemaphoreGive(lora_mutex);
 

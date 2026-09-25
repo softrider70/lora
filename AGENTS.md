@@ -105,6 +105,13 @@ GPIO3/45/46 sind Strapping-Pins und für externe Signale ungeeignet.
    DIO1-Maske (global UND dio1), LDRO bei SF7 aus.
    Nächster Verdacht: SPI-Takt senken (1–2 MHz) bzw. BUSY/DIO1-Verdrahtung
    mit dem Oszilloskop prüfen.
+   Bereits ausgeschlossen bzw. ergänzt (Build 47–53): SPI-Takt 2 MHz hilft
+   nicht; BUSY meldet korrekt Arbeit (`1111111111` nach `Calibrate`);
+   `CalibrateImage` läuft unter `0x98` (nicht `0x89`, das ist `Calibrate`);
+   der Chipmodus bleibt nach `SET_TX` bei `3` (Standby-XOSC) statt `6` (TX).
+   Nächster sinnvoller Schritt: Hardware mit einer erprobten Firmware prüfen
+   (z. B. Meshtastic/Heltec-Demo) oder den Treiber durch eine erprobte
+   SX126x-Implementierung ersetzen.
 
 ## Arbeitsweise in diesem Projekt
 

@@ -176,6 +176,19 @@ Dabei bereits behoben und per Log belegt:
 - **DIO1-Interrupt-Maske** stand im globalen Feld, das DIO1-Feld blieb leer —
   es kam nie ein Interrupt an.
 - **LDRO** war bei SF7 eingeschaltet; bei SF7/BW125 muss es aus sein.
+- **Bild-Kalibrierung** lief unter der falschen Kommando-Nummer: `0x89` ist
+  `Calibrate` (ein Byte Maske), `CalibrateImage` ist `0x98`. Die für 868 MHz
+  nötige Kalibrierung fehlte dadurch ganz.
+
+Weitere Messungen am Sensor-Node (Build 44–53), die die Fehlersuche eingrenzen:
+
+- **BUSY-Leitung ist in Ordnung**: direkt nach `Calibrate` liest der Code
+  `1111111111` — der Chip meldet also Arbeit und wir warten korrekt.
+- **SPI-Takt 2 MHz statt 8 MHz ändert nichts** (kein Timing-/Signalproblem).
+- **Der Chip startet keinen SendeVorgang**: im 5-ms-Raster bleibt der Chipmodus
+  nach `SET_TX` durchgehend `3` (Standby-XOSC); im Sendemodus wäre `6` zu sehen.
+  Die Register-Rücklesung ist dabei exakt (`SyncWord 0x14 0x24`), die
+  Konfiguration kommt also an.
 
 Der GPS-Empfänger liefert NMEA (`NMEA-Empfang bei 9600 Baud`, 0 Prüfsummenfehler),
 hatte drinnen aber noch keinen Fix: `Sat 0, Qual 0, HDOP 99.9`. Qual 0 heißt laut
