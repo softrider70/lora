@@ -90,6 +90,11 @@ static bool lora_initialized = false;
 static uint8_t local_node_id = 1;
 static volatile bool rx_enabled = false;
 
+/* Zuletzt gesetzte TCXO-Spannungsstufe. Der SX1262 verwirft nach dem Reset oft
+ * die ersten Kommandos, deshalb wird die TCXO-Konfiguration vor dem ersten
+ * Empfang noch einmal gesetzt. */
+static uint8_t s_tcxo_stufe = 0x02;   /* 0x02 = 1,8 V (Heltec Vorgabe) */
+
 /* ====================================================================
  * SPI/GPI/O Hilfsfunktionen
  * ==================================================================== */
@@ -467,9 +472,19 @@ esp_err_t lora_init(void)
         ESP_LOGW(TAG, "TCXO-Stufe 0x%02X -> Geraetefehler 0x%04X", tcxo_stufen[i], e);
         if (e == 0) {
             ESP_LOGI(TAG, "TCXO-Einstellung gefunden: Spannung 0x%02X", tcxo_stufen[i]);
+            s_tcxo_stufe = tcxo_stufen[i];
             break;
         }
     }
+
+    /* Chip-Version auslesen (Register 0x0320, 16 Zeichen). Damit laesst sich
+     * pruefen, welcher Chip wirklich auf dem Modul sitzt. */
+    char version[17];
+    for (int i = 0; i < 16; i++) {
+        version[i] = (char)sx1262_read_reg(0x0320 + i);
+    }
+    version[16] = '\0';
+    ESP_LOGI(TAG, "Chip-Version: %s", version);
 
     /* Packet-Typ: LoRa */
     sx1262_cmd_write_byte(SX1262_CMD_SET_PACKETTYPE, 0x01);
@@ -741,6 +756,16 @@ esp_err_t lora_send_async(const lora_message_t *msg)
 esp_err_t lora_start_rx(void)
 {
     if (!lora_initialized) return ESP_ERR_INVALID_STATE;
+
+    /* TCXO hier erneut setzen: nach dem Reset verwirft der SX1262 oft die ersten
+     * Kommandos. Bleibt die Referenz aus, meldet er XOSC_START und lehnt RX/TX
+     * ab. Deshalb vor dem ersten Empfang nochmal setzen und pruefen. */
+    uint8_t tcxo_cfg[4] = { s_tcxo_stufe, 0x00, 0x06, 0x40 };
+    sx1262_cmd_write_buf(SX1262_CMD_SET_DIO3_AS_TCXO_CTRL, tcxo_cfg, 4);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    sx1262_cmd(SX1262_CMD_CLEAR_DEVICE_ERRORS);
+    vTaskDelay(pdMS_TO_TICKS(20));
+    sx1262_log_device_errors("vor dem Empfang");
 
     /* Paket-Laenge auf Maximum setzen */
     uint8_t pktparams[] = {
