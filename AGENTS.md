@@ -127,7 +127,19 @@ Ausgang auf LOW gehalten.
    5. **SPI nicht serialisiert:** main-Task und DIO1-Task sprachen parallel
       über denselben Bus (manuelles NSS!) → `assert spi_device_transmit`
       (Build 119). Jetzt serialisiert `spi_mutex` alle Chipzugriffe.
-   Frühere Verdachtsfälle (SPI-Takt, Regler-Modus, PA-Werte, DIO3-Register,
+   6. **PA-Konfiguration war falsch - Ursache der schlechten Reichweite
+      (gefunden 2026-09-26).** Im Code stand die SX1261-Konfiguration
+      (`deviceSel 0x01, hpMax 0x00`), weil ein 16-Byte-Dump von Register
+      0x0320 sich wie "SX1261 V2D 2D02" liest. Dieser Dump ist **keine**
+      offizielle Chip-ID (dafür gibt es das Kommando `GetVersion` 0x42).
+      Messung bei 30 cm Abstand, gleiche Boards:
+      SX1261-Werte → **−109 dBm**, SX1262-Werte → **−26 dBm**.
+      Das Modul ist also ein **SX1262**; mit den SX1261-Werten sendete es rund
+      80 dB zu leise. Damit ist erklärbar, warum die Strecke zum Balkon
+      zusammenbrach (dort kamen nur noch −106 bis −109 dBm an).
+      Endstand: `LORA_PA_SX1262 1`, `deviceSel 0x00`, `hpMax 0x07`,
+      `LORA_TX_POWER 20` (Datenblatt V3: 21 ± 1 dBm).
+   Frühere Verdachtsfälle (SPI-Takt, Regler-Modus, DIO3-Register,
    Messtest-Varianten) sind damit erledigt. Die 380-mV-Messung am
    Metallbecher hat in die Irre geführt - der Oszillator läuft nachweislich
    (RX und TX auf 868 MHz). Der Messmodus `LORA_TCXO_MESSTEST` in `lora.c`

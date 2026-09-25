@@ -42,7 +42,17 @@ extern "C" {
 #define LORA_SF                 7           /* Spreading Factor 7 */
 #define LORA_CR                 1           /* Coding Rate 4/5 */
 #define LORA_PREAMBLE_LENGTH    8
-#define LORA_TX_POWER           14          /* dBm */
+/* Sendeleistung und PA-Konfiguration.
+ * WICHTIG: Die SX1262-Werte sind Pflicht. Gemessen bei 30 cm Abstand:
+ *   deviceSel 0x01, hpMax 0x00 (SX1261) -> -109 dBm, praktisch kein Signal
+ *   deviceSel 0x00, hpMax 0x07 (SX1262) ->  -26 dBm
+ * Der Wert "SX1261 V2D 2D02" stammte aus einem 16-Byte-Dump von Register
+ * 0x0320 - das ist keine offizielle Versionsquelle (dafuer gibt es das
+ * Kommando GetVersion 0x42). Auf dieser Fehlspur lief der Sender rund 80 dB
+ * zu leise; das war die Ursache der schlechten Reichweite.
+ * LORA_PA_SX1262 nur auf 0 stellen, wenn das Modul wirklich ein SX1261 ist. */
+#define LORA_PA_SX1262          1
+#define LORA_TX_POWER           20          /* dBm; Datenblatt V3: 21 +/- 1 dBm */
 
 /* =====================================================================
  * OLED Display (SSD1306) - I2C-Konfiguration

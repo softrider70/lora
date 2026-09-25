@@ -488,8 +488,13 @@ static void sx1262_config_lora(void)
     sx1262_cmd_write_buf(SX1262_CMD_CALIBRATE, &cal_all, 1);
     vTaskDelay(pdMS_TO_TICKS(20));
 
-    /* PA-Konfiguration der SX1261 (Versionsregister meldet SX1261 V2D). */
+    /* PA-Konfiguration nach Testschalter (siehe config.h):
+     * deviceSel 0x01 = SX1261 (max. 15 dBm), 0x00 = SX1262 (bis 22 dBm). */
+#if LORA_PA_SX1262
+    uint8_t pa_cfg[4] = { 0x04, 0x07, 0x00, 0x01 };
+#else
     uint8_t pa_cfg[4] = { 0x04, 0x00, 0x01, 0x01 };
+#endif
     sx1262_cmd_write_buf(SX1262_CMD_SET_PAOCONFIG, pa_cfg, 4);
 
     uint8_t txp[] = { LORA_TX_POWER, 0x02 };
@@ -663,14 +668,17 @@ esp_err_t lora_init(void)
     ESP_LOGI(TAG, "TCXO 1,8 V: Status 0x%02X (Mode 5 = RX)", sx1262_status());
     sx1262_log_device_errors("nach TCXO und SetRx");
 
-    /* Chip-Version auslesen (Register 0x0320, 16 Zeichen). Damit laesst sich
-     * pruefen, welcher Chip wirklich auf dem Modul sitzt. */
+    /* Register 0x0320 auslesen (16 Bytes). ACHTUNG: Das ist ein roher
+     * Speicherdump und KEINE offizielle Chip-ID - dafuer gibt es das Kommando
+     * GetVersion (0x42). Der Dump liest sich wie "SX1261 V2D 2D02" und hat die
+     * PA-Konfiguration in die Irre gefuehrt: mit den SX1261-Werten sendete das
+     * Modul rund 80 dB zu leise. Nur als Anhaltspunkt ansehen. */
     char version[17];
     for (int i = 0; i < 16; i++) {
         version[i] = (char)sx1262_read_reg(0x0320 + i);
     }
     version[16] = '\0';
-    ESP_LOGI(TAG, "Chip-Version: %s", version);
+    ESP_LOGI(TAG, "Chip-Dump 0x0320 (keine Chip-ID): %s", version);
 
     /* Komplette Konfiguration anwenden (inkl. Regler-Modus und DIO1-Maske). */
     sx1262_config_lora();
@@ -712,12 +720,15 @@ esp_err_t lora_init(void)
     sx1262_log_device_errors("nach der Kalibrierung");
 
     /* PA-Konfiguration: SetPaConfig (0x95) braucht VIER Bytes:
-     * paDutyCycle, hpMax, deviceSel, paLut.
-     * WICHTIG: Das Versionsregister des Moduls meldet "SX1261 V2D" - also die
-     * leistungsschwache Variante. Deren PA-Konfiguration ist
-     * deviceSel = 0x01 und hpMax = 0x00 (max. 15 dBm). Mit den SX1262-Werten
-     * (deviceSel = 0x00, 22 dBm) lehnt der Chip das Senden ab. */
+     * paDutyCycle, hpMax, deviceSel, paLut - Auswahl ueber LORA_PA_SX1262
+     * in config.h. Die fruehere Annahme "mit SX1262-Werten lehnt der Chip das
+     * Senden ab" stammt aus der Zeit des klebenden XOSC-Flags und ist damit
+     * nicht belegt. */
+#if LORA_PA_SX1262
+    uint8_t pa_cfg[4] = { 0x04, 0x07, 0x00, 0x01 };
+#else
     uint8_t pa_cfg[4] = { 0x04, 0x00, 0x01, 0x01 };
+#endif
     sx1262_cmd_write_buf(SX1262_CMD_SET_PAOCONFIG, pa_cfg, 4);
 
     /* Sendeleistung und Rampe */
