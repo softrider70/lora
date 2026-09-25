@@ -145,6 +145,24 @@ GPIO3/45/46 sind Strapping-Pins und für externe Signale ungeeignet.
      Reihenfolge/Reset, Kalibrier-Kommandos, PA-Konfiguration.
      Es bleibt der **XTA/XTB-Trim** (Werte nicht geraten) oder die
      Oszillator-Beschaltung des Moduls selbst.
+   - **Oszilloskop-Messung (2026-09-25):** Ein Pin des 4-poligen Metallbechers
+     neben dem SX1262 folgt dem Testmuster, erreicht aber nur rund **380 mV**
+     statt der konfigurierten 1,8 V - auf **beiden** Boards gleich, und die
+     Spannungsstufe (1,8 V oder 3,3 V) ändert nichts. Der Pegel wird also
+     festgehalten. Der Oszillator bekommt damit keine Versorgung und schwingt
+     nicht an - das erklärt `XOSC_START` und die abgelehnten TX/RX-Kommandos.
+   - **Verdacht (noch offen, naechster Schritt):** DIO3 kann beim SX126x auch
+     ein normaler Digitalausgang sein. RadioLib loescht beim Zurueckkehren in den
+     Paketmodus ausdruecklich `REG_DIOX_OUT_ENABLE` Bit 3 und setzt
+     `REG_DIOX_IN_ENABLE` Bit 3. Sind beide Treiber aktiv, halten sie den Pin
+     gegeneinander - das ergaebe genau die gemessenen 380 mV auf allen Boards,
+     unabhaengig von der Spannungsstufe. Dazu die Registeradressen aus
+     RadioLibs `SX126x.h` holen (nicht raten), die Sequenz vor dem
+     TCXO-Kommando einbauen und erneut messen.
+   - **Messtest im Code:** `LORA_TCXO_MESSTEST` in `lora.c`. Aktuell als
+     Endlosschleife geflasht (200 ms DIO3 an, 100 ms aus, beide Boards:
+     COM3 Build 82, COM8 Build 84). Die restliche Anwendung startet in diesem
+     Modus nicht. Zum Abschalten den Wert auf 0 setzen und beide neu flashen.
    - **GPS ist dagegen bewiesen** (Build 60, Board COM8): `Sat 8, Qual 1,
      HDOP 1.6` und `Sende Position #0 (8 Sat)` — NMEA, Parser, Fix und
      Nutzlast-Aufbau funktionieren.
