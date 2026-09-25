@@ -96,6 +96,11 @@ static volatile bool rx_enabled = false;
  * Empfang noch einmal gesetzt. */
 static uint8_t s_tcxo_stufe = 0x02;   /* 0x02 = 1,8 V (Heltec Vorgabe) */
 
+/* Messtest fuer den Oszillator: schaltet die DIO3-Versorgung im Sekundentakt
+ * ein und aus. Am Vcc-Pad des 4-poligen Oszillators muss dann ein Rechteck
+ * zwischen 0 V und etwa 1,8 V zu sehen sein. 0 = Test aus. */
+#define LORA_TCXO_MESSTEST   6
+
 /* ====================================================================
  * SPI/GPI/O Hilfsfunktionen
  * ==================================================================== */
@@ -502,6 +507,32 @@ esp_err_t lora_init(void)
         ESP_LOGE(TAG, "Chip nach Reset nicht bereit");
         return ESP_ERR_TIMEOUT;
     }
+
+#if LORA_TCXO_MESSTEST > 0
+    /* Messung am Oszillator vorbereiten: ohne Konfiguration ist DIO3 aus
+     * (0 V), mit SetDio3AsTcxoCtrl liegen 1,8 V an. Ein Reset loescht die
+     * Konfiguration wieder, damit entsteht ein Rechteck fuer das Oszilloskop. */
+    for (int i = 0; i < LORA_TCXO_MESSTEST; i++) {
+        gpio_set_level(LORA_RST_GPIO, 0);
+        vTaskDelay(pdMS_TO_TICKS(10));
+        gpio_set_level(LORA_RST_GPIO, 1);
+        vTaskDelay(pdMS_TO_TICKS(900));
+        ESP_LOGW(TAG, "Messtest %d: DIO3 AUS - am Oszillator 0 V erwartet", i + 1);
+
+        uint8_t tcxo_test[4] = { s_tcxo_stufe, 0x00, 0x06, 0x40 };
+        sx1262_cmd_write_buf(SX1262_CMD_SET_DIO3_AS_TCXO_CTRL, tcxo_test, 4);
+        vTaskDelay(pdMS_TO_TICKS(900));
+        ESP_LOGW(TAG, "Messtest %d: DIO3 EIN - am Oszillator %s erwartet",
+                 i + 1, (s_tcxo_stufe == 0x02) ? "1,8 V" : "Spannung der Stufe");
+    }
+
+    /* Zurueck in den Normalzustand */
+    gpio_set_level(LORA_RST_GPIO, 0);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    gpio_set_level(LORA_RST_GPIO, 1);
+    vTaskDelay(pdMS_TO_TICKS(30));
+    wait_on_busy(100);
+#endif
 
     /* Standby */
     sx1262_cmd_write_byte(SX1262_CMD_SET_STANDBY, 0x00);
