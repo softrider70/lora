@@ -41,6 +41,9 @@ static const char *TAG = "LORA";
 #define SX1262_CMD_GET_RXBUFFERSTATUS    0x13
 #define SX1262_CMD_GET_PACKETSTATUS      0x14
 #define SX1262_CMD_SET_DIOIRQPARAMS      0x08
+#define SX1262_CMD_SET_DIO2_AS_RF_SWITCH 0x9D
+#define SX1262_CMD_SET_DIO3_AS_TCXO_CTRL 0x97
+#define SX1262_CMD_CALIBRATE_IMAGE       0x89
 #define SX1262_CMD_WRITE_REGISTER        0x0D
 #define SX1262_CMD_READ_REGISTER         0x1D
 #define SX1262_CMD_WRITE_BUFFER          0x0E
@@ -82,6 +85,7 @@ static volatile int8_t last_snr = 0;
 static TaskHandle_t dio1_task_handle = NULL;
 static bool lora_initialized = false;
 static uint8_t local_node_id = 1;
+static volatile bool rx_enabled = false;
 
 /* ====================================================================
  * SPI/GPI/O Hilfsfunktionen
@@ -99,30 +103,26 @@ static esp_err_t wait_on_busy(uint32_t timeout_ms)
     return ESP_OK;
 }
 
-static void spi_write(uint8_t *data, size_t len)
+/* Jeder Transfer benutzt getrennte Sende- und Empfangspuffer. Vorher zeigten
+ * rx_buffer und tx_buffer auf denselben Speicher - dabei kamen nur Konstanten
+ * wie 0xAA oder 0xA2 zurueck, also keine echten Chipdaten (das SyncWord liess
+ * sich damit nicht zuruecklesen und der IRQ-Status war 0xAA00). */
+static void spi_transfer(const uint8_t *tx, uint8_t *rx, size_t len)
 {
     spi_transaction_t t = {
         .length = len * 8,
-        .tx_buffer = data,
-    };
-    spi_device_transmit(spi_handle, &t);
-}
-
-static void spi_read(uint8_t *data, size_t len)
-{
-    spi_transaction_t t = {
-        .length = len * 8,
-        .rx_buffer = data,
-        .tx_buffer = data,
+        .tx_buffer = tx,
+        .rx_buffer = rx,
     };
     spi_device_transmit(spi_handle, &t);
 }
 
 static uint8_t spi_xfer(uint8_t data)
 {
-    uint8_t buf = data;
-    spi_read(&buf, 1);
-    return buf;
+    uint8_t tx = data;
+    uint8_t rx = 0;
+    spi_transfer(&tx, &rx, 1);
+    return rx;
 }
 
 static void sx1262_cmd(uint8_t cmd)
@@ -155,13 +155,67 @@ static void sx1262_cmd_write_buf(uint8_t cmd, const uint8_t *data, size_t len)
 
 static void sx1262_cmd_read_buf(uint8_t cmd, uint8_t *buf, size_t len)
 {
+    /* Der SX1262 schiebt nach dem Kommando ZUERST sein Statusbyte heraus, erst
+     * danach die Nutzdaten. Belegt durch Reg 0x0740: "A2 14 24 ..." - 0xA2 ist
+     * der Status, 0x14 0x24 sind die geschriebenen Werte. Ohne dieses Byte
+     * waren alle Antworten um eine Stelle verschoben; dadurch wurde TX-Done nie
+     * erkannt und jede Aussendung lief in den Timeout. */
     wait_on_busy(100);
     gpio_set_level(LORA_NSS_GPIO, 0);
     spi_xfer(cmd);
+    (void)spi_xfer(0x00);           /* Statusbyte verwerfen */
     for (size_t i = 0; i < len; i++) {
         buf[i] = spi_xfer(0x00);
     }
     gpio_set_level(LORA_NSS_GPIO, 1);
+}
+
+/* Sendepuffer des SX1262 beschreiben. Offset und Daten gehoeren in EINEN
+ * Zugriff; vorher stand ein 0x00 als eigenes Kommando davor, dadurch landeten
+ * die Nutzdaten nie im Funkpuffer. */
+static void sx1262_write_payload(uint8_t offset, const uint8_t *data, size_t len)
+{
+    wait_on_busy(100);
+    gpio_set_level(LORA_NSS_GPIO, 0);
+    spi_xfer(SX1262_CMD_WRITE_BUFFER);
+    spi_xfer(offset);
+    for (size_t i = 0; i < len; i++) {
+        spi_xfer(data[i]);
+    }
+    gpio_set_level(LORA_NSS_GPIO, 1);
+}
+
+/* Empfangspuffer des SX1262 lesen (Statusbyte zuerst, siehe oben). */
+static void sx1262_read_payload(uint8_t offset, uint8_t *buf, size_t len)
+{
+    wait_on_busy(100);
+    gpio_set_level(LORA_NSS_GPIO, 0);
+    spi_xfer(SX1262_CMD_READ_BUFFER);
+    spi_xfer(offset);
+    (void)spi_xfer(0x00);           /* Statusbyte verwerfen */
+    for (size_t i = 0; i < len; i++) {
+        buf[i] = spi_xfer(0x00);
+    }
+    gpio_set_level(LORA_NSS_GPIO, 1);
+}
+
+/* SetRx und SetTx brauchen drei Parameterbytes (Timeout in Schritten von
+ * 15,625 ms). Ohne diese Bytes nimmt der SX1262 die Kommandos nicht an: er
+ * sendet nicht und meldet auch keinen Abschluss - genau das erzeugte
+ * "TX-Timeout nach 1000 ms". */
+#define SX1262_RX_CONTINUOUS     0xFF, 0xFF, 0xFF
+#define SX1262_TX_NO_TIMEOUT     0x00, 0x00, 0x00
+
+static void sx1262_set_rx_continuous(void)
+{
+    uint8_t params[3] = { SX1262_RX_CONTINUOUS };
+    sx1262_cmd_write_buf(SX1262_CMD_SET_RX, params, 3);
+}
+
+static void sx1262_set_tx(void)
+{
+    uint8_t params[3] = { SX1262_TX_NO_TIMEOUT };
+    sx1262_cmd_write_buf(SX1262_CMD_SET_TX, params, 3);
 }
 
 static void sx1262_write_reg(uint16_t addr, uint8_t val)
@@ -172,11 +226,40 @@ static void sx1262_write_reg(uint16_t addr, uint8_t val)
 
 static uint8_t sx1262_read_reg(uint16_t addr)
 {
-    uint8_t buf[2] = { (addr >> 8) & 0xFF, addr & 0xFF };
-    sx1262_cmd_write_buf(SX1262_CMD_READ_REGISTER, buf, 2);
-    uint8_t result;
-    sx1262_cmd_read_buf(0x00, &result, 1);
+    /* Register lesen geht in EINEM Zugriff: Kommando, Adresse, dann die Daten.
+     * Zwei getrennte Zugriffe (wie vorher) brechen das Lesen ab, weil NSS
+     * dazwischen hochgeht. */
+    wait_on_busy(100);
+    gpio_set_level(LORA_NSS_GPIO, 0);
+    spi_xfer(SX1262_CMD_READ_REGISTER);
+    spi_xfer((addr >> 8) & 0xFF);
+    spi_xfer(addr & 0xFF);
+    (void)spi_xfer(0x00);           /* Statusbyte verwerfen */
+    uint8_t result = spi_xfer(0x00);
+    gpio_set_level(LORA_NSS_GPIO, 1);
     return result;
+}
+
+/* Diagnose: mehrere Bytes ab einer Registeradresse ausgeben. Damit laesst sich
+ * sehen, ob und an welcher Stelle die geschriebenen Werte zurueckkommen. */
+static void sx1262_dump_reg(uint16_t addr, int anzahl)
+{
+    char zeile[96];
+    int pos = 0;
+
+    wait_on_busy(100);
+    gpio_set_level(LORA_NSS_GPIO, 0);
+    spi_xfer(SX1262_CMD_READ_REGISTER);
+    spi_xfer((addr >> 8) & 0xFF);
+    spi_xfer(addr & 0xFF);
+    (void)spi_xfer(0x00);           /* Statusbyte verwerfen */
+    for (int i = 0; i < anzahl; i++) {
+        uint8_t v = spi_xfer(0x00);
+        pos += snprintf(zeile + pos, sizeof(zeile) - pos, "%02X ", v);
+    }
+    gpio_set_level(LORA_NSS_GPIO, 1);
+
+    ESP_LOGI(TAG, "Reg 0x%04X (%d Byte): %s", addr, anzahl, zeile);
 }
 
 /* ====================================================================
@@ -206,7 +289,16 @@ static void dio1_event_task(void *arg)
 
         if (irq_mask & SX1262_IRQ_TX_DONE) {
             ESP_LOGD(TAG, "TX abgeschlossen");
-            current_state = LORA_STATE_IDLE;
+
+            /* Nach dem Senden wieder auf Empfang gehen. Ohne das hoert der Node
+             * nach seinem ersten Paket nie wieder etwas: der SX1262 bleibt im
+             * Standby stehen, bis ihn jemand neu auf RX setzt. */
+            if (rx_enabled) {
+                sx1262_set_rx_continuous();
+                current_state = LORA_STATE_RX;
+            } else {
+                current_state = LORA_STATE_IDLE;
+            }
         }
 
         if (irq_mask & SX1262_IRQ_RX_DONE) {
@@ -225,9 +317,7 @@ static void dio1_event_task(void *arg)
             last_snr = (int8_t)(pkt_status[1]) / 4;
 
             uint8_t raw[LORA_MAX_PAYLOAD_LEN];
-            uint8_t read_cmd[2] = { 0, 0 };
-            sx1262_cmd_write_buf(SX1262_CMD_READ_BUFFER, read_cmd, 2);
-            sx1262_cmd_read_buf(0x00, raw, payload_len);
+            sx1262_read_payload(0x00, raw, payload_len);
 
             lora_message_t msg;
             memset(&msg, 0, sizeof(msg));
@@ -248,11 +338,11 @@ static void dio1_event_task(void *arg)
                 rx_callback(&msg);
             }
 
-            sx1262_cmd(SX1262_CMD_SET_RX);
+            sx1262_set_rx_continuous();
         }
 
         if (irq_mask & SX1262_IRQ_TIMEOUT) {
-            sx1262_cmd(SX1262_CMD_SET_RX);
+            sx1262_set_rx_continuous();
         }
     }
 }
@@ -325,6 +415,16 @@ esp_err_t lora_init(void)
     /* Standby */
     sx1262_cmd_write_byte(SX1262_CMD_SET_STANDBY, 0x00);
 
+    /* TCXO ueber DIO3 versorgen. Die Heltec V3 hat einen temperaturkompensierten
+     * Oszillator (TCXO), der seine Versorgung von DIO3 bekommt. Ohne diese
+     * Einstellung kann der Chip seine Referenz nicht starten: SetRx und SetTx
+     * werden dann mit "failure to execute command" abgelehnt (Status 0x2A,
+     * Chip bleibt im Standby).
+     * Bytes: Spannung (0x02 = 1,8 V), dann Verzoegerung in 15,625-us-Schritten
+     * (0x000640 = 25 ms). */
+    uint8_t tcxo_cfg[4] = { 0x02, 0x00, 0x06, 0x40 };
+    sx1262_cmd_write_buf(SX1262_CMD_SET_DIO3_AS_TCXO_CTRL, tcxo_cfg, 4);
+
     /* Packet-Typ: LoRa */
     sx1262_cmd_write_byte(SX1262_CMD_SET_PACKETTYPE, 0x01);
 
@@ -333,8 +433,21 @@ esp_err_t lora_init(void)
     uint8_t rf[4] = { (frf >> 24) & 0xFF, (frf >> 16) & 0xFF, (frf >> 8) & 0xFF, frf & 0xFF };
     sx1262_cmd_write_buf(SX1262_CMD_SET_RFFREQUENCY, rf, 4);
 
-    /* PA-Konfiguration */
-    sx1262_cmd_write_byte(SX1262_CMD_SET_PAOCONFIG, 0x04);
+    /* Bild-Kalibrierung fuer das Band 863-870 MHz. Der SX1262 verlangt sie nach
+     * dem Setzen der Frequenz; die beiden Werte sind laut Datenblatt-Tabelle
+     * fuer dieses Band festgelegt (freq1 = 0xD7, freq2 = 0xDB). */
+    uint8_t cal_img[2] = { 0xD7, 0xDB };
+    sx1262_cmd_write_buf(SX1262_CMD_CALIBRATE_IMAGE, cal_img, 2);
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    /* PA-Konfiguration: SetPaConfig (0x95) braucht VIER Bytes:
+     * paDutyCycle, hpMax, deviceSel, paLut. Vorher wurde nur ein Byte gesendet
+     * - das Kommando war damit ungueltig und der SX1262 hat nicht gesendet
+     * (kein TX-Done, IRQ-Status blieb 0x0000). Werte: SX1262, 22 dBm Weg. */
+    uint8_t pa_cfg[4] = { 0x04, 0x07, 0x00, 0x01 };
+    sx1262_cmd_write_buf(SX1262_CMD_SET_PAOCONFIG, pa_cfg, 4);
+
+    /* Sendeleistung und Rampe */
     uint8_t txp[] = { LORA_TX_POWER, 0x02 };
     sx1262_cmd_write_buf(SX1262_CMD_SET_TXPARAMS, txp, 2);
 
@@ -349,7 +462,10 @@ esp_err_t lora_init(void)
         case 2:  bw = 0x07; break; /* 500 kHz */
         default: bw = 0x05;
     }
-    uint8_t modparams[] = { LORA_SF, bw, LORA_CR_4_5, 0x01 };
+    /* LDRO = 0: die Low-Data-Rate-Optimierung gilt nur fuer lange Symbole
+     * (SF11/SF12 bei BW125). Bei SF7 muss sie aus sein, sonst versteht die
+     * Gegenseite die Pakete nicht. */
+    uint8_t modparams[] = { LORA_SF, bw, LORA_CR_4_5, 0x00 };
     sx1262_cmd_write_buf(SX1262_CMD_SET_LORAMODPARAMS, modparams, 4);
 
     /* Packet-Parameter: Preamble, Header, CRC, IQ */
@@ -371,11 +487,31 @@ esp_err_t lora_init(void)
     sx1262_write_reg(SX1262_REG_LORA_DETECTION_OPT, 0x07);
     sx1262_write_reg(SX1262_REG_LORA_DETECTION_TH, 0x0A);
 
-    /* DIO1-IRQ konfigurieren: TX Done, RX Done, Timeout */
-    uint8_t dio_irq[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
-    dio_irq[0] = (SX1262_IRQ_ALL >> 8) & 0xFF;
-    dio_irq[1] = SX1262_IRQ_ALL & 0xFF;
+    /* Kontrolle: bekannte Register zuruecklesen. Erwartet werden die oben
+     * geschriebenen Werte (SyncWord 0x14 0x24, Detection 0x07 0x0A). */
+    sx1262_dump_reg(SX1262_REG_LORA_SYNCWORD, 6);
+    sx1262_dump_reg(SX1262_REG_LORA_DETECTION_OPT, 3);
+    ESP_LOGI(TAG, "Kontrolle: SyncWord gelesen 0x%02X 0x%02X (erwartet 0x14 0x24)",
+             sx1262_read_reg(SX1262_REG_LORA_SYNCWORD),
+             sx1262_read_reg(SX1262_REG_LORA_SYNCWORD + 1));
+
+    /* DIO1-IRQ konfigurieren: TX Done, RX Done, Timeout.
+     * Die 8 Bytes sind: globalIrqMask(2), dio1Mask(2), dio2Mask(2), dio3Mask(2).
+     * Vorher stand die Maske im GLOBALEN Feld und dio1Mask blieb 0 - dadurch kam
+     * am DIO1-Pin nie ein Interrupt an: jede Aussendung lief in den Timeout und
+     * Empfang wurde nie gemeldet. */
+    uint8_t dio_irq[8] = {
+        (SX1262_IRQ_ALL >> 8) & 0xFF, SX1262_IRQ_ALL & 0xFF,
+        (SX1262_IRQ_ALL >> 8) & 0xFF, SX1262_IRQ_ALL & 0xFF,
+        0x00, 0x00,
+        0x00, 0x00,
+    };
     sx1262_cmd_write_buf(SX1262_CMD_SET_DIOIRQPARAMS, dio_irq, 8);
+
+    /* DIO2 steuert den HF-Umschalter (im Schaltplan als SW_CT gezeichnet).
+     * Ohne diese Einstellung wird die Sendeleistung nicht auf die Antenne
+     * gefuehrt und der Empfaenger hoert nichts. */
+    sx1262_cmd_write_byte(SX1262_CMD_SET_DIO2_AS_RF_SWITCH, 0x01);
 
     /* DIO1 Interrupt-Task starten */
     xTaskCreatePinnedToCore(dio1_event_task, "lora_dio1", 2048, NULL, 7, &dio1_task_handle, 1);
@@ -446,9 +582,7 @@ esp_err_t lora_send(const lora_message_t *msg, uint32_t timeout_ms)
 
     /* Write Buffer */
     raw_len = (raw_len > LORA_MAX_PAYLOAD_LEN) ? LORA_MAX_PAYLOAD_LEN : raw_len;
-    uint8_t buf_len[2] = { 0, 0 };
-    sx1262_cmd_write_buf(SX1262_CMD_WRITE_BUFFER, buf_len, 2);
-    sx1262_cmd_write_buf(0x00, raw, raw_len);
+    sx1262_write_payload(0x00, raw, raw_len);
 
     /* Payload-Laenge setzen */
     uint8_t pktparams[] = {
@@ -462,8 +596,18 @@ esp_err_t lora_send(const lora_message_t *msg, uint32_t timeout_ms)
     sx1262_cmd_write_buf(SX1262_CMD_SET_LORAPKTPARAMS, pktparams, 6);
 
     /* Senden */
-    sx1262_cmd(SX1262_CMD_SET_TX);
+    sx1262_set_tx();
     ESP_LOGD(TAG, "Sende %u Bytes", raw_len);
+
+    /* Diagnose: 300 ms nach dem Start nachsehen, ob der Chip im Sendemodus ist
+     * (Status 0x6A = TX) und ob der Abschluss gemeldet wurde. */
+    vTaskDelay(pdMS_TO_TICKS(300));
+    uint8_t irq_dbg[2] = { 0, 0 };
+    uint8_t st_dbg = 0;
+    sx1262_cmd_read_buf(SX1262_CMD_GET_IRQSTATUS, irq_dbg, 2);
+    sx1262_cmd_read_buf(0xC0, &st_dbg, 1);
+    ESP_LOGI(TAG, "Nach SET_TX: IRQ 0x%02X%02X, Status 0x%02X, BUSY=%d",
+             irq_dbg[0], irq_dbg[1], st_dbg, gpio_get_level(LORA_BUSY_GPIO));
 
     xSemaphoreGive(lora_mutex);
 
@@ -471,7 +615,17 @@ esp_err_t lora_send(const lora_message_t *msg, uint32_t timeout_ms)
     TickType_t start = xTaskGetTickCount();
     while (current_state == LORA_STATE_TX) {
         if ((xTaskGetTickCount() - start) >= pdMS_TO_TICKS(timeout_ms)) {
-            ESP_LOGW(TAG, "TX-Timeout nach %lu ms", timeout_ms);
+            /* Diagnose: hat der Chip den Abschluss gemeldet? Dann liegt es am
+             * Interrupt-Weg. Ist der IRQ-Status 0, hat er gar nicht gesendet.
+             * Das Statusbyte zeigt zusaetzlich den Chipmodus (2 = Standby,
+             * 5 = RX, 6 = TX). */
+            uint8_t irq[2] = { 0, 0 };
+            uint8_t status = 0;
+            sx1262_cmd_read_buf(SX1262_CMD_GET_IRQSTATUS, irq, 2);
+            sx1262_cmd_read_buf(0xC0, &status, 1);   /* GetStatus */
+            ESP_LOGW(TAG, "TX-Timeout nach %lu ms (IRQ 0x%02X%02X, Status 0x%02X, DIO1=%d)",
+                     (unsigned long)timeout_ms, irq[0], irq[1], status,
+                     gpio_get_level(LORA_DIO1_GPIO));
             return ESP_ERR_TIMEOUT;
         }
         vTaskDelay(pdMS_TO_TICKS(10));
@@ -498,9 +652,7 @@ esp_err_t lora_send_async(const lora_message_t *msg)
         memcpy(raw + 2, msg->payload, msg->payload_len);
     }
 
-    uint8_t buf_len[2] = { 0, 0 };
-    sx1262_cmd_write_buf(SX1262_CMD_WRITE_BUFFER, buf_len, 2);
-    sx1262_cmd_write_buf(0x00, raw, raw_len);
+    sx1262_write_payload(0x00, raw, raw_len);
 
     uint8_t pktparams[] = {
         (LORA_PREAMBLE_LENGTH >> 8) & 0xFF,
@@ -509,7 +661,7 @@ esp_err_t lora_send_async(const lora_message_t *msg)
     };
     sx1262_cmd_write_buf(SX1262_CMD_SET_LORAPKTPARAMS, pktparams, 6);
 
-    sx1262_cmd(SX1262_CMD_SET_TX);
+    sx1262_set_tx();
 
     xSemaphoreGive(lora_mutex);
     return ESP_OK;
@@ -531,7 +683,8 @@ esp_err_t lora_start_rx(void)
     sx1262_cmd_write_buf(SX1262_CMD_SET_LORAPKTPARAMS, pktparams, 6);
 
     current_state = LORA_STATE_RX;
-    sx1262_cmd(SX1262_CMD_SET_RX);
+    rx_enabled = true;
+    sx1262_set_rx_continuous();
     ESP_LOGI(TAG, "RX-Modus gestartet");
     return ESP_OK;
 }
@@ -541,6 +694,7 @@ esp_err_t lora_stop_rx(void)
     if (!lora_initialized) return ESP_ERR_INVALID_STATE;
 
     sx1262_cmd_write_byte(SX1262_CMD_SET_STANDBY, 0x00);
+    rx_enabled = false;
     current_state = LORA_STATE_IDLE;
     ESP_LOGI(TAG, "RX-Modus gestoppt");
     return ESP_OK;

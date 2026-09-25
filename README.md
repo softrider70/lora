@@ -155,8 +155,27 @@ COM8**.
   ursprünglich konfigurierten GPIO41/42 waren falsch (JTAG-Pins MTDI/MTMS),
   richtig sind GPIO17 (SDA) / GPIO18 (SCL).
 
-Die Funkübertragung läuft: beide Nodes senden alle 5 s
-(`Kein GPS-Fix - sende Status #2`, SX1262 initialisiert mit 868 MHz/SF7).
+**Funkstrecke: noch nicht in Betrieb.** Beide Nodes versuchen alle 5 s zu senden
+(Log: `Kein GPS-Fix - sende Status #N`), aber der SX1262 führt das Sende-Kommando
+nicht aus: 300 ms nach `SET_TX` steht er laut Statusbyte weiter im Standby
+(`0x3A` = STDBY_XOSC, im Sendemodus wäre es `0x6A`), der IRQ-Status bleibt
+`0x0000`. Empfangsmeldungen (`RX:`) gibt es deshalb auf keinem der beiden Boards.
+
+Dabei bereits behoben und per Log belegt:
+
+- **SPI-Antworten waren um ein Byte verschoben**: der SX1262 schiebt zuerst sein
+  Statusbyte heraus. Beleg: `Reg 0x0740 (6 Byte): A2 14 24 ...` — 0xA2 ist der
+  Status, 0x14 0x24 die geschriebenen Werte. Jetzt liest die Kontrolle
+  `SyncWord gelesen 0x14 0x24`.
+- **Sendepuffer** wurde mit `0x00` als eigenem Kommando beschrieben und landete
+  damit nie im Funkpuffer; Schreiben und Lesen sind jetzt ein Zugriff.
+- **`SetPaConfig`** wurde mit einem statt vier Bytes gesendet (Kommando ungültig).
+- **TCXO an DIO3** fehlte: ohne sie startet die Referenz nicht (Status `0x2A`),
+  mit ihr läuft der Oszillator (`0x3A`).
+- **Nach dem Senden** wurde der Empfang nie wieder eingeschaltet.
+- **DIO1-Interrupt-Maske** stand im globalen Feld, das DIO1-Feld blieb leer —
+  es kam nie ein Interrupt an.
+- **LDRO** war bei SF7 eingeschaltet; bei SF7/BW125 muss es aus sein.
 
 Der GPS-Empfänger liefert NMEA (`NMEA-Empfang bei 9600 Baud`, 0 Prüfsummenfehler),
 hatte drinnen aber noch keinen Fix: `Sat 0, Qual 0, HDOP 99.9`. Qual 0 heißt laut

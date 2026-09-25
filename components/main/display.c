@@ -434,6 +434,24 @@ static void display_update(void)
     }
 }
 
+/* Eine einzelne Seite (8 Pixelzeilen) uebertragen. Beim Zeilenzeichnen wird
+ * nur die betroffene Seite gesendet: das spart I2C-Verkehr und verhindert, dass
+ * bei einem Uebertragungsfehler andere Zeilen leer bleiben. */
+static void display_update_page(int page)
+{
+    if (!display_initialized) return;
+    if (page < 0 || page >= DISPLAY_PAGES) return;
+
+    display_send_cmd(SSD1306_CMD_COLUMNADDR);
+    display_send_cmd(0);
+    display_send_cmd(DISPLAY_WIDTH - 1);
+    display_send_cmd(SSD1306_CMD_PAGEADDR);
+    display_send_cmd(page);
+    display_send_cmd(page);
+
+    display_send_data(page, framebuffer[page], DISPLAY_WIDTH);
+}
+
 /* Ein Pixel im Framebuffer setzen */
 static void display_set_pixel(int x, int y, bool on)
 {
@@ -598,5 +616,5 @@ void display_show_line(int line, const char *text)
     memset(framebuffer[line], 0, DISPLAY_WIDTH);
 
     display_draw_string(0, y, text);
-    display_update();
+    display_update_page(line);
 }

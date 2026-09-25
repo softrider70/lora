@@ -97,6 +97,14 @@ GPIO3/45/46 sind Strapping-Pins und für externe Signale ungeeignet.
    das OLED hängt an GPIO17 (SDA) / GPIO18 (SCL). Ist im Code so gesetzt.
 4. `sdkconfig.defaults` enthält veraltete Symbole (`ESP_INT_WDT_INIT`,
    `ESP_WDT_INIT`, `MDNS_ENABLE_NETWORKING`) — Kconfig warnt, sonst harmlos.
+5. **SX1262 sendet nicht** (offen, Stand Build 44): Status bleibt `0x3A`
+   (STDBY_XOSC), IRQ `0x0000` — `SetTx` wird vom Chip nicht ausgeführt.
+   Behoben wurden auf dem Weg dorthin: um ein Byte verschobene SPI-Antworten
+   (Statusbyte zuerst), Schreiben/Lesen des Funkpuffers, `SetPaConfig` mit den
+   vier Pflichtbytes, TCXO an DIO3 (0x97), RX-Wiederaufnahme nach TX,
+   DIO1-Maske (global UND dio1), LDRO bei SF7 aus.
+   Nächster Verdacht: SPI-Takt senken (1–2 MHz) bzw. BUSY/DIO1-Verdrahtung
+   mit dem Oszilloskop prüfen.
 
 ## Arbeitsweise in diesem Projekt
 

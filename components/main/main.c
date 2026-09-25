@@ -18,6 +18,7 @@
 #include "freertos/timers.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_random.h"
 #include "esp_mac.h"
 #include "nvs_flash.h"
 #include "driver/gpio.h"
@@ -184,7 +185,11 @@ static void lora_task(void *arg)
     uint32_t counter = 0;
 
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(LORA_SEND_INTERVAL_MS));
+        /* Etwas Streuung, damit beide Nodes nicht im gleichen Moment senden:
+         * waehrend des Sendens ist der Empfang aus, gleichzeitige Pakete gehen
+         * sonst regelmaessig verloren. */
+        uint32_t streuung = esp_random() % 1500;
+        vTaskDelay(pdMS_TO_TICKS(LORA_SEND_INTERVAL_MS + streuung));
 
         gps_data_t gps;
         gps_get_data(&gps);
