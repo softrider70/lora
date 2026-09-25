@@ -263,6 +263,10 @@ esp_err_t ota_init(void)
     /* HTTP-Server starten */
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = OTA_WEBSERVER_PORT;
+    /* Das Captive Portal laeuft auf Port 80 und belegt auch den Steuerport
+     * 32768. Ohne eigenen Steuerport scheitert der zweite Server mit
+     * "httpd_server_init: error in creating ctrl socket (112)". */
+    config.ctrl_port = OTA_CTRL_PORT;
     config.max_uri_handlers = 8;
     config.lru_purge_enable = true;
     config.stack_size = 4096;

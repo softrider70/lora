@@ -9,15 +9,31 @@ Handles semantic versioning: MAJOR.MINOR.BUILD
 import os
 import re
 import time
+import argparse
 from pathlib import Path
 
-# PROJECT_ROOT is one level up from tools/
-PROJECT_ROOT = Path(__file__).parent.parent
+# PROJECT_ROOT ist normalerweise eine Ebene ueber tools/ und laesst sich mit
+# --project-dir ueberschreiben (so laesst sich das Skript in jedem Projekt
+# benutzen, ohne es zu kopieren).
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BUILD_NUMBER_FILE = PROJECT_ROOT / ".build_number"
 LAST_VERSION_FILE = PROJECT_ROOT / ".last_version"
 VERSION_TEMPLATE = PROJECT_ROOT / "include" / "version.h.in"
 VERSION_HEADER = PROJECT_ROOT / "include" / "version.h"
 CONFIG_HEADER = PROJECT_ROOT / "include" / "config.h"
+
+
+def set_project_root(path):
+    """Projektordner setzen und alle abgeleiteten Pfade neu berechnen."""
+    global PROJECT_ROOT, BUILD_NUMBER_FILE, LAST_VERSION_FILE
+    global VERSION_TEMPLATE, VERSION_HEADER, CONFIG_HEADER
+
+    PROJECT_ROOT = Path(path).resolve()
+    BUILD_NUMBER_FILE = PROJECT_ROOT / ".build_number"
+    LAST_VERSION_FILE = PROJECT_ROOT / ".last_version"
+    VERSION_TEMPLATE = PROJECT_ROOT / "include" / "version.h.in"
+    VERSION_HEADER = PROJECT_ROOT / "include" / "version.h"
+    CONFIG_HEADER = PROJECT_ROOT / "include" / "config.h"
 
 def read_version_from_config():
     """Extract APP_VERSION_MAJOR and APP_VERSION_MINOR from config.h"""
@@ -104,6 +120,15 @@ def generate_version_header(major, minor, build_num):
     return version_string
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Build-Zaehler erhoehen und include/version.h erzeugen")
+    parser.add_argument(
+        "--project-dir",
+        default=str(Path(__file__).resolve().parent.parent),
+        help="Projektordner (Default: Ordner ueber tools/)")
+    args = parser.parse_args()
+    set_project_root(args.project_dir)
+
     try:
         # Read MAJOR and MINOR from config.h
         major, minor = read_version_from_config()

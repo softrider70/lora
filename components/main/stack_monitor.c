@@ -8,6 +8,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "config.h"
 #include "stack_monitor.h"
 
 static const char *TAG = "STACK_MON";
@@ -63,7 +64,7 @@ void stack_monitor_init(void)
     BaseType_t ret = xTaskCreatePinnedToCore(
         stack_monitor_task,
         "stk_mon",
-        configMINIMAL_STACK_SIZE + 256,
+        TASK_STACK_MONITOR,
         NULL,
         tskIDLE_PRIORITY,
         &monitor_task,

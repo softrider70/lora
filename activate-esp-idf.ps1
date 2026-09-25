@@ -51,3 +51,9 @@ if (Test-Path $exportScript) {
 
 Write-Host "IDF_PATH: $env:IDF_PATH" -ForegroundColor Cyan
 Write-Host "IDF_PYTHON_ENV_PATH: $env:IDF_PYTHON_ENV_PATH" -ForegroundColor Cyan
+
+# PATH entdoppeln. Mehrfaches Aktivieren laesst den PATH sonst ueber 32 KB
+# wachsen; Windows verweigert dann den Start von Prozessen und der Build laeuft
+# ohne Ausgabe ins Leere.
+$env:PATH = (($env:PATH -split ';' | Where-Object { $_ -ne '' }) |
+    Select-Object -Unique) -join ';'

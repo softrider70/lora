@@ -1,115 +1,156 @@
-# LoRa — ESP32-S3 LoRa Kommunikation (Heltec WiFi LoRa 32 V3)
+# LoRa — Heltec WiFi LoRa 32 V3 mit GPS
 
-Zwei **Heltec WiFi LoRa 32 V3** Module tauschen ueber **LoRa-Funk (SX1262)** Daten aus. Beide Module zeigen Status auf dem integrierten **OLED Display (SSD1306)** und unterstuetzen **OTA-Firmware-Updates**.
+Zwei **Heltec WiFi LoRa 32 V3** (ESP32-S3 + SX1262) tauschen über LoRa Nachrichten
+aus. Ein Board bekommt ein **GPS-Modul (GY-NE06MV2, u-blox NEO-6M)** und sendet
+seine Position; beide Boards zeigen die Position auf dem OLED an.
 
-## Board: Heltec WiFi LoRa 32 V3
+- **Sensor-Node** (mit GPS): COM3
+- **Anzeige-Node** (ohne GPS): COM8
 
-| Komponente | Spezifikation |
+Beide Boards laufen mit **derselben Firmware**. Ob ein Fix vorliegt, erkennt das
+Board selbst — ohne GPS sendet es nur ein Lebenszeichen (Status).
+
+## Hardware
+
+| Komponente | Wert |
 |---|---|
-| **Chip** | ESP32-S3 (Dual-Core Xtensa LX7, bis 240MHz) |
-| **LoRa** | SX1262 (868/915MHz, SPI) |
-| **Display** | OLED SSD1306 128x64 (I2C: SDA=GPIO41, SCL=GPIO42) |
-| **LED** | GPIO35 |
-| **Taster** | GPIO0 (BOOT) |
-| **Flash** | 16MB Quad-Flash (QIO, 80MHz) |
-| **PSRAM** | 8MB Octal (OPI, 80MHz) |
-| **USB** | USB-C (USB Serial/JTAG native) |
-| **WiFi** | 802.11 b/g/n, AP + STA Modus |
+| Chip | ESP32-S3N8 (8 MB Flash, kein PSRAM) |
+| LoRa | SX1262, 868 MHz, SF7, BW125, 14 dBm |
+| Display | OLED SSD1306 128x64, I2C, Adresse 0x3C |
+| Board-LED | GPIO35 |
+| Taster | GPIO0 (BOOT) |
+| Konsole | UART0 über CP2102 (GPIO43/44), 115200 Baud |
 
-## Features
+## GPS anschließen (GY-NE06MV2)
 
-- **LoRa-Kommunikation** zwischen zwei Nodes (SX1262, 868MHz EU-Band)
-- **OLED Display** mit Echtzeit-Status (TX/RX, RSSI, SNR)
-- **OTA-Updates** ueber eingebetteten Webserver (minimale Web-UI)
-- **WiFi Captive Portal** (AP bei fehlenden Credentials)
-- **NVS-Konfigurationsspeicher** (Node-ID, WiFi-Credentials)
-- **Stack- und Heap-Monitoring**
-- **ESP-IDF 6.1, FreeRTOS (Dual-Core)**
-
-## Kommunikation
-
-Nachrichtentypen zwischen den Nodes:
-
-| Typ | Wert | Beschreibung |
+| GPS-Modul | Heltec V3 | Header |
 |---|---|---|
-| `LORA_MSG_TYPE_SENSOR` | 0x01 | Sensorwerte (Temperatur, Spannung, Heap, Uptime) |
-| `LORA_MSG_TYPE_STATUS` | 0x02 | Statusmeldung |
-| `LORA_MSG_TYPE_PING` | 0x03 | Ping |
-| `LORA_MSG_TYPE_PONG` | 0x04 | Pong |
-| `LORA_MSG_TYPE_ALARM` | 0x06 | Alarm |
+| **TX** (Modul sendet) | **GPIO4** (ESP-Empfang) | J3 Pin 15 |
+| **RX** (Modul empfängt) | **GPIO5** (ESP-Senden) | J3 Pin 16 |
+| VCC | 5V (oder 3V3) | J2 Pin 2 (bzw. J3 Pin 2/3) |
+| GND | GND | J3 Pin 1 |
 
-## Schnellstart
+Die Leitungen werden gekreuzt: **TX des Moduls auf GPIO4**, **RX des Moduls auf
+GPIO5**. Für reines Auswerten reichen TX, VCC und GND; GPIO5 wird nur gebraucht,
+wenn man das Modul konfigurieren will.
 
-### Build
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build-and-commit.ps1
+Das Modul sendet NMEA-0183 mit 9600 Baud. Ein NEO-6M mit Backup-Batterie kann
+eine andere Baudrate behalten — der Treiber sucht deshalb der Reihe nach
+9600, 38400, 57600, 115200 und 4800 Baud ab, bis Daten ankommen.
+
+Freie Pins am Board: GPIO1–7, GPIO38, GPIO45–48. Belegt sind LoRa (8–14),
+OLED intern (17/18, RST 21, Versorgung über Vext 36), LED 35, ADC_Ctrl 37,
+Taster 0, Konsole 43/44, USB 19/20, interner Flash 26–32.
+
+## Anzeige (8 Zeilen à 21 Zeichen)
+
+```
+N217 B10 9Sat      Node-ID, Build-Nummer, Satelliten
+Lat +49.1234567    eigene Breite (7 Stellen ~ 1 cm)
+Lon +8.1234567     eigene Länge
+Alt 123m HDOP 0.9  Höhe und Güte
+TX#12 -80dBm SN7dB letzter Sendevorgang
+RX N55 -95dBm      Funkstatus der Gegenseite
+Lat +48.9876543    empfangene Breite
+Lon +9.1234567     empfangene Länge
 ```
 
-### Flash (initial)
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\flash-mode.ps1 -Mode usb -UsbPort COM11
-```
+Ohne Fix stehen in Zeile 1–3 „warte auf GPS-Fix", Satelliten/Baudrate und die
+IP-Adresse.
 
-### OTA Flash (nach erstem Flash)
+## Nachrichten zwischen den Nodes
+
+| Typ | Wert | Inhalt |
+|---|---|---|
+| `LORA_MSG_TYPE_STATUS` | 0x02 | Zähler (4 Byte) + Chip-Temperatur, wenn kein Fix |
+| `LORA_MSG_TYPE_PING` | 0x03 | Ping, wird mit PONG beantwortet |
+| `LORA_MSG_TYPE_PONG` | 0x04 | Antwort auf Ping |
+| `LORA_MSG_TYPE_GPS` | 0x07 | Position, 12 Byte: lat/lon als int32 (Grad × 10^7), Höhe als int16 (Meter), Satelliten, HDOP × 10 |
+
+Die Position wird im Takt von `LORA_SEND_INTERVAL_MS` (5 s) gesendet, sobald ein
+Fix vorliegt.
+
+## Bauen und flashen
+
 ```powershell
+# Bauen (erhoeht die Build-Nummer, siehe unten)
+. .\activate-esp-idf.ps1
+idf.py build
+
+# Sensor-Node (COM3)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\flash-mode.ps1 -Mode usb -UsbPort COM3
+
+# Beide Boards nacheinander (COM3 und COM8)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\flash-mode.ps1 -Mode beide
+
+# OTA (nach dem ersten USB-Flash)
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\flash-mode.ps1 -Mode ota
+
+# Monitor
+idf.py -p COM3 monitor
 ```
 
-### Monitor
-```bash
-idf.py -p COM11 monitor
-```
+Das Flash-Skript prüft, ob der Port wirklich angeschlossen ist (PnP-Status OK),
+beendet verwaiste `idf_monitor`-Prozesse und wertet den Exit-Code aus.
 
-## OTA-WebUI
+## Build-Nummer
 
-Nach erfolgreichem WiFi-Verbindungsaufbau ist das Board erreichbar:
-- **mDNS:** `http://lora-node.local`
-- **AP-Modus:** `http://10.1.1.1`
-- OTA-Update per `Upload & Flashen` (nur `.bin`-Dateien)
+`tools/increment_build.py` zählt bei jedem Build hoch und schreibt
+`include/version.h` und `.build_number`. Das ist als CMake-Ziel `lora_version`
+eingebunden, läuft also ohne Zutun. Die Nummer steht an drei Stellen:
+
+1. Im Log als **letzte Startmeldung**: `Heltec WiFi LoRa 32 V3 bereit - Build 10`
+2. Auf dem **Display** in Zeile 0 (`N217 B10 9Sat`)
+3. In `include/version.h`
+
+MAJOR/MINOR stehen in `include/config.h`, BUILD kommt aus dem Zähler.
+
+## WiFi und OTA
+
+- Ohne gespeicherte Zugangsdaten startet ein Access Point `LoRa-AP` mit Captive
+  Portal auf `http://10.1.1.1` (Port 80).
+- Der OTA-Webserver läuft auf **Port 8080**: `http://lora-node.local:8080`
+  (mDNS) bzw. `http://10.1.1.1:8080`. Port 80 und der Steuerport 32768 sind vom
+  Captive Portal belegt — deshalb 8080 und 32769.
+- Langer Tastendruck auf BOOT (> 3 s) löscht die WiFi-Zugangsdaten.
 
 ## Projektstruktur
 
 ```
 lora/
-├── components/main/       Quellcode
-│   ├── main.c             Hauptprogramm
-│   ├── lora.c             SX1262 LoRa-Treiber
-│   ├── display.c          SSD1306 OLED via I2C
-│   ├── wifi.c             WiFi-Manager
-│   ├── ota.c              OTA-Webserver
-│   ├── nvs_config.c       NVS-Konfigurationsspeicher
-│   ├── stack_monitor.c    Stack-Ueberwachung
-│   └── heap_monitor.c     Heap-Ueberwachung
-├── include/               Header
-│   ├── config.h           Hardware-Konfiguration
-│   ├── lora.h             LoRa-API
-│   ├── display.h          Display-API
-│   ├── wifi.h             WiFi-API
-│   ├── ota.h              OTA-API
-│   ├── nvs_config.h       NVS-API
-│   └── version.h.in       Version-Template
-├── tools/                 Build-Skripte
-│   ├── build-and-commit.ps1
-│   ├── flash-mode.ps1
-│   └── increment_build.py
-├── CMakeLists.txt         ESP-IDF Projekt
-├── sdkconfig.defaults     Board-Konfiguration
-├── partitions.csv         OTA-Partitionen (16MB)
-└── activate-esp-idf.ps1   ESP-IDF aktivieren
+├── components/main/
+│   ├── main.c            Programm: Tasks, Anzeige, GPS-Verpackung, RX-Auswertung
+│   ├── gps.c/.h          GPS-Treiber (UART, NMEA-GGA, Baudraten-Suche)
+│   ├── lora.c            SX1262-Treiber (SPI, DIO1-Interrupt)
+│   ├── display.c         SSD1306 über I2C, Framebuffer, 5x7-Font, I2C-Scan
+│   ├── wifi.c            WiFi-Manager und Captive Portal
+│   ├── ota.c             OTA-Webserver (Port 8080)
+│   ├── nvs_config.c      NVS-Konfiguration (Node-ID, Zugangsdaten)
+│   ├── heap_monitor.c    Heap-Statistik alle 10 s
+│   └── stack_monitor.c   Stack-Statistik alle 15 s
+├── include/              Header und Hardware-Konfiguration (config.h)
+├── tools/                Build-, Flash- und Zaehlskripte
+├── partitions.csv        8 MB Flash mit ota_0/ota_1 und lora_data
+└── sdkconfig.defaults    Board-Konfiguration
 ```
 
-## Konfiguration
+## Bekannte Befunde (gemessen, nicht vermutet)
 
-Alle wichtigen Parameter in `include/config.h`:
-- **LoRa-Frequenz, SF, BW, Sendeleistung**
-- **Display-Pins (I2C) und Timing**
-- **WiFi-AP-SSID, Timeouts**
-- **OTA-Port, mDNS-Hostname**
-- **Task-Stacks und Prioritaeten**
+Alles am 2026-09-25 am Board auf COM3 (Build 8–10) aus dem Log belegt:
 
-## Versionierung
+- **Button-Task hatte 1024 Byte Stack** → „A stack overflow in task button",
+  das Board startete in einer Schleife neu. Ebenso `stk_mon` und `display`.
+  Ursache war `configMINIMAL_STACK_SIZE + 256` in den Monitor-Tasks — das sind
+  Bytes, nicht Wörter. Jetzt: 4096 / 3072 / 4096. Seitdem kein Neustart mehr.
+- **OTA-Server auf Port 80** startete nicht („error in listen (112)"), weil das
+  Captive Portal Port 80 und Steuerport 32768 belegt. Jetzt 8080 / 32769.
+- **OLED antwortet nicht**: `SSD1306-Init fehlgeschlagen:
+  ESP_ERR_INVALID_RESPONSE`. Der I2C-Scan findet auf GPIO17/18 **und** auf
+  GPIO41/42 keinen Chip (0x08–0x77). Das Display war vorher auf GPIO41/42
+  konfiguriert; das sind beim ESP32-S3 die JTAG-Pins MTDI/MTMS. Auf beiden
+  Paaren antwortet nichts — das deutet auf ein fehlendes oder nicht versorgtes
+  Display an diesem Board hin. Das nächste Einschalten zeigt im Log die
+  Ruhepegel der Leitungen („Ruhepegel SDA=1 SCL=1" = Bus frei, Gerät fehlt).
 
-`MAJOR.MINOR.BUILD` — automatisch via `tools/increment_build.py`:
-- MAJOR/MINOR in `config.h` (`APP_VERSION_MAJOR`, `APP_VERSION_MINOR`)
-- BUILD wird bei jedem Build inkrementiert
-- Bei Aenderung von MAJOR/MINOR wird BUILD auf 0 zurueckgesetzt
+Die LoRa-Übertragung selbst läuft: der Sensor-Node sendet alle 5 s
+(`Kein GPS-Fix - sende Status #2`, SX1262 initialisiert mit 868 MHz/SF7).

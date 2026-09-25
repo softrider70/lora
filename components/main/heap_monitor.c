@@ -9,6 +9,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "config.h"
 #include "heap_monitor.h"
 
 static const char *TAG = "HEAP_MON";
@@ -65,7 +66,7 @@ void heap_monitor_init(void)
     BaseType_t ret = xTaskCreatePinnedToCore(
         heap_monitor_task,
         "heap_mon",
-        configMINIMAL_STACK_SIZE + 512,
+        TASK_STACK_MONITOR,
         NULL,
         tskIDLE_PRIORITY,
         &monitor_task,

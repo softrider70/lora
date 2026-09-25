@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "driver/i2c_master.h"
+#include "driver/gpio.h"
 #include "config.h"
 #include "display.h"
 #include "lora.h"
@@ -245,6 +246,54 @@ static esp_err_t ssd1306_init_seq(void)
     return ret;
 }
 
+/* Diagnose: Auf welchen Adressen antwortet ein Chip an diesem Pin-Paar?
+ * Wird nur aufgerufen, wenn die Display-Initialisierung fehlschlaegt. So steht
+ * im Log, ob es an den Pins, an der Adresse oder an der Versorgung liegt. */
+static void display_i2c_scan_pins(int sda, int scl)
+{
+    i2c_master_bus_handle_t scan_bus = NULL;
+    i2c_master_bus_config_t scan_cfg = {
+        .i2c_port = I2C_NUM_1,      /* Nummer 0 ist vom Display belegt */
+        .sda_io_num = sda,
+        .scl_io_num = scl,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+
+    if (i2c_new_master_bus(&scan_cfg, &scan_bus) != ESP_OK) {
+        ESP_LOGW(TAG, "Scan auf SDA=%d/SCL=%d nicht moeglich", sda, scl);
+        return;
+    }
+
+    int found = 0;
+    for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+        if (i2c_master_probe(scan_bus, addr, 50) == ESP_OK) {
+            ESP_LOGI(TAG, "  Antwort 0x%02X (SDA=%d, SCL=%d)", addr, sda, scl);
+            found++;
+        }
+    }
+
+    if (found == 0) {
+        ESP_LOGW(TAG, "  Kein Chip auf SDA=%d, SCL=%d", sda, scl);
+    }
+
+    i2c_del_master_bus(scan_bus);
+
+    /* Ruhepegel der beiden Leitungen: 1/1 = Bus frei, es fehlt nur ein Geraet.
+     * 0 = Leitung wird festgehalten, dann stimmt etwas an der Beschaltung nicht. */
+    gpio_config_t pegel = {
+        .pin_bit_mask = (1ULL << sda) | (1ULL << scl),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&pegel);
+    vTaskDelay(pdMS_TO_TICKS(2));
+    ESP_LOGI(TAG, "  Ruhepegel SDA=%d SCL=%d (1 = hoch/frei)",
+             gpio_get_level(sda), gpio_get_level(scl));
+}
+
 /* Display initialisieren */
 esp_err_t display_init(void)
 {
@@ -253,6 +302,18 @@ esp_err_t display_init(void)
     if (display_initialized) {
         return ESP_OK;
     }
+
+    /* Vext einschalten - erst damit ist das OLED versorgt (LOW = ein).
+     * Ohne Vext antwortet der SSD1306 nicht auf der I2C-Adresse. */
+    gpio_config_t vext = {
+        .pin_bit_mask = (1ULL << DISPLAY_VEXT_GPIO),
+        .mode = GPIO_MODE_OUTPUT,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&vext);
+    gpio_set_level(DISPLAY_VEXT_GPIO, 0);
+    ESP_LOGI(TAG, "Vext (GPIO%d) eingeschaltet", DISPLAY_VEXT_GPIO);
+    vTaskDelay(pdMS_TO_TICKS(50));
 
     ESP_LOGI(TAG, "Initialisiere I2C (SDA=%d, SCL=%d, Freq=%d Hz)",
              DISPLAY_SDA_GPIO, DISPLAY_SCL_GPIO, DISPLAY_I2C_FREQ);
@@ -292,6 +353,13 @@ esp_err_t display_init(void)
     ret = ssd1306_init_seq();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "SSD1306-Init fehlgeschlagen: %s", esp_err_to_name(ret));
+
+        /* Diagnose: wer antwortet auf welchem Pin-Paar? */
+        ESP_LOGW(TAG, "I2C-Scan auf den konfigurierten Pins:");
+        display_i2c_scan_pins(DISPLAY_SDA_GPIO, DISPLAY_SCL_GPIO);
+        ESP_LOGW(TAG, "I2C-Scan auf den alten Pins (Gegenprobe):");
+        display_i2c_scan_pins(DISPLAY_ALT_SDA_GPIO, DISPLAY_ALT_SCL_GPIO);
+
         i2c_master_bus_rm_device(dev_handle);
         i2c_del_master_bus(bus_handle);
         bus_handle = NULL;

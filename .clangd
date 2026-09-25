@@ -1,2 +1,7 @@
+# clangd benutzt build/compile_commands.json. Der Pfad steht bewusst hier
+# (relativ zur Datei) und nicht als absoluter Pfad in .vscode/settings.json -
+# absolute Pfade gehoeren nicht ins Repository.
+CompilationDatabase: build
+
 CompileFlags:
     Remove: [-f*, -m*]

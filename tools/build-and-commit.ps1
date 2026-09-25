@@ -14,32 +14,32 @@ if (-not (Test-Path $exportBat)) {
     exit 1
 }
 
-# Build-Nummer inkrementieren
-$incrementScript = Join-Path $ProjectPath "tools\increment_build.py"
-if (Test-Path $incrementScript) {
-    Write-Host "Incrementing build number..." -ForegroundColor Cyan
-    & python "$incrementScript"
-}
-
-# Build-Nummer auslesen
-$buildNumberPath = Join-Path $ProjectPath ".build_number"
-$buildNumber = if (Test-Path $buildNumberPath) { Get-Content $buildNumberPath -Raw } else { "?" }
-
-# Build ausführen
+# Build ausfuehren. Die Build-Nummer erhoeht das CMake-Ziel lora_version
+# waehrend des Builds (tools/increment_build.py) - deshalb hier kein Aufruf.
 Write-Host "Building project..." -ForegroundColor Cyan
 $activateScript = Join-Path $ProjectPath "activate-esp-idf.ps1"
-$buildCmd = ". '$activateScript'; `$env:IDF_PY_BUILD_JOBS = '6'; idf.py build"
+$buildCmd = ". '$activateScript'; `$env:IDF_PY_BUILD_JOBS = '6'; idf.py build; exit `$LASTEXITCODE"
+
+$buildLog = Join-Path $ProjectPath "build\build.log"
 $buildStartTime = Get-Date
-powershell -ExecutionPolicy Bypass -NoProfile -Command $buildCmd | Out-Null
+# Ausgabe mitschreiben und anzeigen. Wird sie verschluckt, fehlt bei einem
+# Fehlschlag die Ursache.
+powershell -ExecutionPolicy Bypass -NoProfile -Command $buildCmd 2>&1 |
+    Tee-Object -FilePath $buildLog | Select-Object -Last 25
 $buildExitCode = $LASTEXITCODE
 $buildDuration = ((Get-Date) - $buildStartTime).TotalSeconds
 
+# Build-Nummer auslesen (schreibt der Build selbst)
+$buildNumberPath = Join-Path $ProjectPath ".build_number"
+$buildNumber = if (Test-Path $buildNumberPath) { Get-Content $buildNumberPath -Raw } else { "?" }
+
 if ($buildExitCode -ne 0) {
-    Write-Host "Build failed! (Dauer: $($buildDuration.ToString('F1'))s)" -ForegroundColor Red
+    Write-Host "Build fehlgeschlagen! (Dauer: $($buildDuration.ToString('F1'))s)" -ForegroundColor Red
+    Write-Host "Log: $buildLog" -ForegroundColor Yellow
     exit $buildExitCode
 }
 
-Write-Host "Build erfolgreich! (Dauer: $($buildDuration.ToString('F1'))s)" -ForegroundColor Green
+Write-Host "Build erfolgreich! (Dauer: $($buildDuration.ToString('F1'))s, Build $buildNumber)" -ForegroundColor Green
 
 # Nur Metadaten committen (nicht Build-Artefakte)
 Write-Host "Staging Metadaten..." -ForegroundColor Cyan

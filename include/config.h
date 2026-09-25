@@ -46,10 +46,22 @@ extern "C" {
 
 /* =====================================================================
  * OLED Display (SSD1306) - I2C-Konfiguration
+ *
+ * ACHTUNG: hier standen GPIO41/GPIO42. Das sind beim ESP32-S3 die
+ * JTAG-Pins MTDI/MTMS, nicht die Display-Leitungen. Belegt am 2026-09-25:
+ * Display-Init meldete damit "ESP_ERR_INVALID_RESPONSE" (kein ACK auf 0x3C).
+ * Das OLED haengt intern an GPIO17 (SDA) / GPIO18 (SCL); RST liegt auf GPIO21.
  * ===================================================================== */
 #define DISPLAY_I2C_PORT        I2C_NUM_0
-#define DISPLAY_SDA_GPIO        41
-#define DISPLAY_SCL_GPIO        42
+#define DISPLAY_SDA_GPIO        17
+#define DISPLAY_SCL_GPIO        18
+#define DISPLAY_RST_GPIO        21
+#define DISPLAY_VEXT_GPIO       36          /* Vext_Ctrl, LOW = Display versorgt */
+
+/* Gegenprobe fuer den I2C-Scan, wenn die Display-Init fehlschlaegt:
+ * das war die Belegung der ersten Fassung. */
+#define DISPLAY_ALT_SDA_GPIO    41
+#define DISPLAY_ALT_SCL_GPIO    42
 #define DISPLAY_I2C_FREQ        400000      /* 400 kHz */
 #define DISPLAY_I2C_ADDR        0x3C
 #define DISPLAY_WIDTH           128
@@ -70,6 +82,25 @@ extern "C" {
 #define BUTTON_LONGPRESS_MS     3000
 
 /* =====================================================================
+ * GPS (GY-NE06MV2 mit u-blox NEO-6M) - UART1
+ *
+ * Anschluss am Heltec WiFi LoRa 32 V3:
+ *   GPS-TX  -> GPIO4  (ESP-Empfang)   Header J3 Pin 15
+ *   GPS-RX  -> GPIO5  (ESP-Senden)    Header J3 Pin 16
+ *   VCC     -> 5V oder 3V3            J2 Pin 2 / J3 Pin 2-3
+ *   GND     -> GND                    J3 Pin 1
+ * GPIO4/5 sind frei, keine Strapping-Pins. Belegt sind bereits:
+ * LoRa 8-14, OLED 17/18 + RST 21, LED 35, Vext 36, ADC_Ctrl 37,
+ * Taster 0, Konsole 43/44, USB 19/20, interner Flash 26-32.
+ * ===================================================================== */
+#define GPS_UART_PORT           1           /* UART_NUM_1 */
+#define GPS_TX_GPIO             5           /* ESP sendet -> GPS-RX */
+#define GPS_RX_GPIO             4           /* GPS sendet -> ESP-RX */
+#define GPS_RX_BUFFER_SIZE      1024
+#define GPS_TASK_STACK          3584
+#define GPS_TASK_PRIORITY       4
+
+/* =====================================================================
  * WiFi & OTA
  * ===================================================================== */
 #define WIFI_AP_SSID            "LoRa-AP"
@@ -78,7 +109,8 @@ extern "C" {
 #define WIFI_CONNECT_TIMEOUT_S  15
 #define WIFI_MAX_RETRY          3
 
-#define OTA_WEBSERVER_PORT      80
+#define OTA_WEBSERVER_PORT      8080        /* 80 belegt das Captive Portal */
+#define OTA_CTRL_PORT           32769       /* 32768 belegt das Captive Portal */
 #define OTA_CHECK_INTERVAL_MS   60000       /* 60s */
 
 /* =====================================================================
@@ -95,6 +127,10 @@ extern "C" {
 #define LORA_MSG_TYPE_PONG      0x04        /* Pong */
 #define LORA_MSG_TYPE_CONFIG    0x05        /* Konfiguration */
 #define LORA_MSG_TYPE_ALARM     0x06        /* Alarm */
+#define LORA_MSG_TYPE_GPS       0x07        /* GPS-Position (12 Byte binaer) */
+
+/* Laenge der GPS-Nutzlast in Bytes (siehe gps_build_payload in main.c) */
+#define LORA_GPS_PAYLOAD_LEN    12
 
 /* Maximale Nutzdatenlaenge einer LoRa-Nachricht */
 #define LORA_MAX_PAYLOAD_LEN    240
@@ -103,10 +139,20 @@ extern "C" {
  * FreeRTOS Task-Konfiguration
  * ===================================================================== */
 #define TASK_STACK_LORA         4096
-#define TASK_STACK_DISPLAY      2048
+#define TASK_STACK_DISPLAY      4096        /* 2048 war zu knapp - Stack-Overflow */
 #define TASK_STACK_WIFI         4096
 #define TASK_STACK_OTA          4096
-#define TASK_STACK_MONITOR      1024
+
+/* Stackgroesse der Monitor-Tasks in Bytes. Beide Tasks benutzten vorher
+ * configMINIMAL_STACK_SIZE + 256/512; das sind Bytes, nicht Woerter, und zu
+ * wenig. Belegt am 2026-09-25: "A stack overflow in task stk_mon". */
+#define TASK_STACK_MONITOR      3072
+
+/* Der Button-Task benutzte TASK_STACK_MONITOR (1024 Byte). Das ist zu wenig:
+ * er loggt, zeichnet aufs Display und schreibt ins NVS. Belegt am 2026-09-25 -
+ * "A stack overflow in task button has been detected" direkt nach dem Start,
+ * danach Neustart-Schleife (Rebooting...). */
+#define TASK_STACK_BUTTON       4096
 
 #define TASK_PRIORITY_LORA      5
 #define TASK_PRIORITY_DISPLAY   3
