@@ -97,35 +97,42 @@ GPIO3/45/46 sind Strapping-Pins und für externe Signale ungeeignet.
    das OLED hängt an GPIO17 (SDA) / GPIO18 (SCL). Ist im Code so gesetzt.
 4. `sdkconfig.defaults` enthält veraltete Symbole (`ESP_INT_WDT_INIT`,
    `ESP_WDT_INIT`, `MDNS_ENABLE_NETWORKING`) — Kconfig warnt, sonst harmlos.
-5. **SX1262 sendet nicht** (offen, Stand Build 44): Status bleibt `0x3A`
-   (STDBY_XOSC), IRQ `0x0000` — `SetTx` wird vom Chip nicht ausgeführt.
-   Behoben wurden auf dem Weg dorthin: um ein Byte verschobene SPI-Antworten
-   (Statusbyte zuerst), Schreiben/Lesen des Funkpuffers, `SetPaConfig` mit den
-   vier Pflichtbytes, TCXO an DIO3 (0x97), RX-Wiederaufnahme nach TX,
-   DIO1-Maske (global UND dio1), LDRO bei SF7 aus.
-   Nächster Verdacht: SPI-Takt senken (1–2 MHz) bzw. BUSY/DIO1-Verdrahtung
-   mit dem Oszilloskop prüfen.
-   Bereits ausgeschlossen bzw. ergänzt (Build 47–53): SPI-Takt 2 MHz hilft
-   nicht; BUSY meldet korrekt Arbeit (`1111111111` nach `Calibrate`);
-   `CalibrateImage` läuft unter `0x98` (nicht `0x89`, das ist `Calibrate`);
-   der Chipmodus bleibt nach `SET_TX` bei `3` (Standby-XOSC) statt `6` (TX).
-   Nächster sinnvoller Schritt: Hardware mit einer erprobten Firmware prüfen
-   (z. B. Meshtastic/Heltec-Demo) oder den Treiber durch eine erprobte
-   SX126x-Implementierung ersetzen.
-   **Entscheidender Messbefund (Build 56–58):** `GetDeviceErrors` (0x17) liefert
-   `XOSC_START` (0x0020) und `PLL_LOCK` (0x0040). Die Referenz des Chips läuft
-   also nicht an — deshalb lehnt er `SetTx`/`SetRx` ab, während Registerzugriffe
-   und Konfiguration weiter funktionieren. Der Fehler tritt bei **allen**
-   TCXO-Spannungsstufen auf (`0xFF` = keine Konfiguration bis `0x07` = 3,3 V),
-   also auch, wenn gar kein TCXO angenommen wird. Das deutet auf die Hardware
-   (Quarz/TCXO des Moduls) hin, nicht auf eine Einstellung im Code.
-   `ClearDeviceErrors` (0x07) wirkt (der Wert wechselt), `Calibrate` (0x89,
-   Maske 0x7F) setzt XOSC_START erneut — der Fehler ist also echt bei jedem
-   Anlauf.
-   Gegenprobe mit erprobter Firmware steht aus: Meshtastic-Server
-   (`fw.meshtastic.org`) löst nicht auf, das Release-Paket für esp32s3 ist
-   162 MB groß.
-   **Weitere Messungen (Build 60–67):**
+5. **SX1262 sendet nicht — GELÖST (Build 122/123).** Der Funkverkehr läuft
+   jetzt in **beide Richtungen**: COM8 (Node 9 mit GPS) sendet Positionen,
+   COM3 (Node 217) empfängt sie (`RX: Type=0x07, Node=9` →
+   `GPS von Node 9: +50.1234567 (3 Sat)`), und die Statusmeldungen von COM3
+   kommen auf COM8 an. Die Ursachen (alle im Log belegt):
+   1. **`ClearDeviceErrors` (0x07) braucht ZWEI Parameterbytes** (Inhalt egal).
+      Vorher wurde nur das Kommando gesendet - das war wirkungslos, das
+      `XOSC_START`-Flag klebte und der Chip lehnte `SetTx`/`SetRx` ab
+      (Build 89: Clear alt → Fehler bleibt `0x0020`; Clear mit zwei Bytes →
+      `0x0000`, danach `SetRx` → Status `0xD2` = Mode 5). Quelle: RadioLib
+      (`clearDeviceErrors`, zwei NOP-Bytes) und LoRaMac-node.
+   2. **Frequenzformel war falsch:** `f / 15625` (0x00D900) statt
+      `f * 2^25 / 32 MHz` (= 0x36400000 für 868 MHz; RadioLib:
+      `FREQUENCY_STEP_SIZE 0,9536743164`). Mit dem falschen Wert lockte die
+      PLL nie (`PLL_LOCK`), sobald die Frequenz konfiguriert war (Build 101:
+      `SetFs` vor der Konfiguration ok, danach `PLL_LOCK`). Mit 0x36400000:
+      `SetFs` → Mode 4, `SetTx` → Mode 6, Fehler `0x0000` (Build 104).
+   3. **Bandbreiten-Code:** 0x04 = 125 kHz, 0x05 = 250 kHz (SX126x-Tabelle
+      laut RadioLib). Im Code stand 0x05 mit dem Kommentar "125 kHz".
+   4. **`lora_dio1`-Task hatte 2048 Byte Stack** (Bytes, nicht Wörter!) →
+      Überlauf zerstörte den Heap, Absturz (`LoadProhibited`) im nächsten
+      `gpio_install_isr_service` (Build 116). Jetzt `TASK_STACK_LORA` (4096).
+   5. **SPI nicht serialisiert:** main-Task und DIO1-Task sprachen parallel
+      über denselben Bus (manuelles NSS!) → `assert spi_device_transmit`
+      (Build 119). Jetzt serialisiert `spi_mutex` alle Chipzugriffe.
+   Frühere Verdachtsfälle (SPI-Takt, Regler-Modus, PA-Werte, DIO3-Register,
+   Messtest-Varianten) sind damit erledigt. Die 380-mV-Messung am
+   Metallbecher hat in die Irre geführt - der Oszillator läuft nachweislich
+   (RX und TX auf 868 MHz). Der Messmodus `LORA_TCXO_MESSTEST` in `lora.c`
+   ist aus (0); als letzte Stufe enthält er die "Abschlussprobe" (FS/TX mit
+   korrigierter Frequenz und Chipmodus-Ausgabe) für spätere Prüfungen.
+   (Details der Fehlersuche von Build 44 bis 87 stehen im Git-Verlauf dieser
+   Datei; die dort genannten Ausschluesse sind mit den Erkenntnissen von
+   Build 89-123 ueberholt.)
+   **Verlauf der Fehlersuche (ueberholt - die Ursachen stehen oben):**
+   weitere Messungen (Build 60–67):
    - Das Versionsregister meldet `SX1261 V2D 2D02` — auf dem Modul sitzt die
      leistungsschwache Variante (max. 15 dBm). Deren PA-Konfiguration
      (`deviceSel 0x01`, `hpMax 0x00`) ist jetzt gesetzt.
@@ -150,7 +157,8 @@ GPIO3/45/46 sind Strapping-Pins und für externe Signale ungeeignet.
      statt der konfigurierten 1,8 V - auf **beiden** Boards gleich, und die
      Spannungsstufe (1,8 V oder 3,3 V) ändert nichts. Der Pegel wird also
      festgehalten. Der Oszillator bekommt damit keine Versorgung und schwingt
-     nicht an - das erklärt `XOSC_START` und die abgelehnten TX/RX-Kommandos.
+     nicht an. **(Mit Build 122/123 widerlegt: der Oszillator läuft - RX und
+     TX arbeiten auf 868 MHz. Die 380-mV-Messung war ein Fehlschluss.)**
    - **DIO3-Register geprueft (Build 86/87, Verdacht widerlegt):** Adressen
      aus RadioLibs `SX126x_registers.h` (nicht geraten): `DIOX_OUT_ENABLE`
      0x0580 (**invertiert**: Bit 3 = 1 schaltet den Ausgang ab), `DIOX_IN_ENABLE`
@@ -171,12 +179,11 @@ GPIO3/45/46 sind Strapping-Pins und für externe Signale ungeeignet.
      Kalibrier-Kommando, Fehlerwort ins Log, dann rund 480 ms TCXO an.
      Die restliche Anwendung startet in diesem Modus nicht. Zum Abschalten
      den Wert auf 0 setzen und beide neu flashen.
-   - **Offen / naechster Schritt:** Die Oszilloskop-Messung gegenzaehlen
-     (Kanal auf **1 MOhm**, DC-Kopplung, 10:1-Tastkopf - bei 50 Ohm bricht
-     eine TCXO-Versorgung ein; die gemessenen 380 mV waeren an 50 Ohm rund
-     7,6 mA, das passt zu einem strombegrenzten Ausgang). Bleibt es bei
-     380 mV, kommen nur noch XTA/XTB-Trim (Werte nicht geraten) oder die
-     Oszillator-Beschaltung des Moduls in Frage.
+   - **Erledigt (Build 122/123):** Der Funkbetrieb läuft in beide Richtungen,
+     siehe Punkt 5 oben. Als Diagnosewerkzeug bleibt der Messmodus
+     `LORA_TCXO_MESSTEST` in `lora.c`: auf > 0 gesetzt (und neu geflasht)
+     durchläuft er in `lora_init` die FS/TX-Probe mit Reset-Pulsmuster; auf 0
+     startet die normale Anwendung.
    - **GPS ist dagegen bewiesen** (Build 60, Board COM8): `Sat 8, Qual 1,
      HDOP 1.6` und `Sende Position #0 (8 Sat)` — NMEA, Parser, Fix und
      Nutzlast-Aufbau funktionieren.
