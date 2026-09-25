@@ -45,6 +45,8 @@ static const char *TAG = "LORA";
 #define SX1262_CMD_SET_DIO3_AS_TCXO_CTRL 0x97
 #define SX1262_CMD_CALIBRATE             0x89
 #define SX1262_CMD_CALIBRATE_IMAGE       0x98
+#define SX1262_CMD_CLEAR_DEVICE_ERRORS   0x07
+#define SX1262_CMD_GET_DEVICE_ERRORS     0x17
 #define SX1262_CMD_WRITE_REGISTER        0x0D
 #define SX1262_CMD_READ_REGISTER         0x1D
 #define SX1262_CMD_WRITE_BUFFER          0x0E
@@ -223,6 +225,23 @@ static void sx1262_write_reg(uint16_t addr, uint8_t val)
 {
     uint8_t buf[3] = { (addr >> 8) & 0xFF, addr & 0xFF, val };
     sx1262_cmd_write_buf(SX1262_CMD_WRITE_REGISTER, buf, 3);
+}
+
+/* Fehlerregister des SX1262 ausgeben. Wichtig: XOSC_START und PLL_LOCK zeigen
+ * an, dass die Referenz bzw. die PLL nicht laeuft - dann werden SetTx und SetRx
+ * abgelehnt, waehrend Registerzugriffe und Konfiguration weiter funktionieren. */
+static void sx1262_log_device_errors(const char *wo)
+{
+    uint8_t err[2] = { 0, 0 };
+    sx1262_cmd_read_buf(SX1262_CMD_GET_DEVICE_ERRORS, err, 2);
+    uint16_t e = ((uint16_t)err[0] << 8) | err[1];
+
+    ESP_LOGW(TAG, "Geraetefehler %s: 0x%04X%s%s%s%s%s", wo, e,
+             (e & 0x0008) ? " ADC_CALIB" : "",
+             (e & 0x0004) ? " PLL_CALIB" : "",
+             (e & 0x0010) ? " IMG_CALIB" : "",
+             (e & 0x0020) ? " XOSC_START" : "",
+             (e & 0x0040) ? " PLL_LOCK" : "");
 }
 
 static uint8_t sx1262_read_reg(uint16_t addr)
@@ -420,15 +439,37 @@ esp_err_t lora_init(void)
     /* Standby */
     sx1262_cmd_write_byte(SX1262_CMD_SET_STANDBY, 0x00);
 
-    /* TCXO ueber DIO3 versorgen. Die Heltec V3 hat einen temperaturkompensierten
-     * Oszillator (TCXO), der seine Versorgung von DIO3 bekommt. Ohne diese
-     * Einstellung kann der Chip seine Referenz nicht starten: SetRx und SetTx
-     * werden dann mit "failure to execute command" abgelehnt (Status 0x2A,
-     * Chip bleibt im Standby).
-     * Bytes: Spannung (0x02 = 1,8 V), dann Verzoegerung in 15,625-us-Schritten
-     * (0x000640 = 25 ms). */
-    uint8_t tcxo_cfg[4] = { 0x02, 0x00, 0x06, 0x40 };
-    sx1262_cmd_write_buf(SX1262_CMD_SET_DIO3_AS_TCXO_CTRL, tcxo_cfg, 4);
+    /* TCXO ueber DIO3 versorgen - Spannung suchen.
+     * Gemessen (Build 56): mit 1,8 V stehen im Fehlerregister XOSC_START und
+     * PLL_LOCK (0x0060). Die Referenz laeuft also nicht an, und deshalb lehnt
+     * der Chip SetTx und SetRx ab, waehrend Registerzugriffe weiter gehen.
+     * Hier werden die Stufen der Reihe nach gesetzt und jeweils Fehler gelesen;
+     * 0x00 = 1,6 V ... 0x07 = 3,3 V. 0xFF = keine TCXO-Konfiguration (fuer den
+     * Fall, dass das Board einen normalen Quarz hat). */
+    const uint8_t tcxo_stufen[] = { 0xFF, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07 };
+
+    for (unsigned i = 0; i < sizeof(tcxo_stufen); i++) {
+        if (tcxo_stufen[i] != 0xFF) {
+            uint8_t tcxo_cfg[4] = { tcxo_stufen[i], 0x00, 0x06, 0x40 };
+            sx1262_cmd_write_buf(SX1262_CMD_SET_DIO3_AS_TCXO_CTRL, tcxo_cfg, 4);
+        }
+        vTaskDelay(pdMS_TO_TICKS(60));
+
+        uint8_t cal_stufe = 0x7F;
+        sx1262_cmd_write_buf(SX1262_CMD_CALIBRATE, &cal_stufe, 1);
+        vTaskDelay(pdMS_TO_TICKS(30));
+
+        sx1262_cmd(SX1262_CMD_CLEAR_DEVICE_ERRORS);
+        uint8_t err[2] = { 0, 0 };
+        sx1262_cmd_read_buf(SX1262_CMD_GET_DEVICE_ERRORS, err, 2);
+        uint16_t e = ((uint16_t)err[0] << 8) | err[1];
+
+        ESP_LOGW(TAG, "TCXO-Stufe 0x%02X -> Geraetefehler 0x%04X", tcxo_stufen[i], e);
+        if (e == 0) {
+            ESP_LOGI(TAG, "TCXO-Einstellung gefunden: Spannung 0x%02X", tcxo_stufen[i]);
+            break;
+        }
+    }
 
     /* Packet-Typ: LoRa */
     sx1262_cmd_write_byte(SX1262_CMD_SET_PACKETTYPE, 0x01);
@@ -461,6 +502,10 @@ esp_err_t lora_init(void)
     }
     ESP_LOGI(TAG, "BUSY direkt nach CalibrateImage: %s", busy_probe);
     vTaskDelay(pdMS_TO_TICKS(10));
+
+    /* Kalibrierung ist durch - gemerkte Fehler loeschen und Stand ausgeben. */
+    sx1262_cmd(SX1262_CMD_CLEAR_DEVICE_ERRORS);
+    sx1262_log_device_errors("nach der Kalibrierung");
 
     /* PA-Konfiguration: SetPaConfig (0x95) braucht VIER Bytes:
      * paDutyCycle, hpMax, deviceSel, paLut. Vorher wurde nur ein Byte gesendet
@@ -651,6 +696,7 @@ esp_err_t lora_send(const lora_message_t *msg, uint32_t timeout_ms)
             ESP_LOGW(TAG, "TX-Timeout nach %lu ms (IRQ 0x%02X%02X, Status 0x%02X, DIO1=%d)",
                      (unsigned long)timeout_ms, irq[0], irq[1], status,
                      gpio_get_level(LORA_DIO1_GPIO));
+            sx1262_log_device_errors("beim Senden");
             return ESP_ERR_TIMEOUT;
         }
         vTaskDelay(pdMS_TO_TICKS(10));

@@ -112,6 +112,19 @@ GPIO3/45/46 sind Strapping-Pins und für externe Signale ungeeignet.
    Nächster sinnvoller Schritt: Hardware mit einer erprobten Firmware prüfen
    (z. B. Meshtastic/Heltec-Demo) oder den Treiber durch eine erprobte
    SX126x-Implementierung ersetzen.
+   **Entscheidender Messbefund (Build 56–58):** `GetDeviceErrors` (0x17) liefert
+   `XOSC_START` (0x0020) und `PLL_LOCK` (0x0040). Die Referenz des Chips läuft
+   also nicht an — deshalb lehnt er `SetTx`/`SetRx` ab, während Registerzugriffe
+   und Konfiguration weiter funktionieren. Der Fehler tritt bei **allen**
+   TCXO-Spannungsstufen auf (`0xFF` = keine Konfiguration bis `0x07` = 3,3 V),
+   also auch, wenn gar kein TCXO angenommen wird. Das deutet auf die Hardware
+   (Quarz/TCXO des Moduls) hin, nicht auf eine Einstellung im Code.
+   `ClearDeviceErrors` (0x07) wirkt (der Wert wechselt), `Calibrate` (0x89,
+   Maske 0x7F) setzt XOSC_START erneut — der Fehler ist also echt bei jedem
+   Anlauf.
+   Gegenprobe mit erprobter Firmware steht aus: Meshtastic-Server
+   (`fw.meshtastic.org`) löst nicht auf, das Release-Paket für esp32s3 ist
+   162 MB groß.
 
 ## Arbeitsweise in diesem Projekt
 

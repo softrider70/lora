@@ -189,6 +189,12 @@ Weitere Messungen am Sensor-Node (Build 44–53), die die Fehlersuche eingrenzen
   nach `SET_TX` durchgehend `3` (Standby-XOSC); im Sendemodus wäre `6` zu sehen.
   Die Register-Rücklesung ist dabei exakt (`SyncWord 0x14 0x24`), die
   Konfiguration kommt also an.
+- **Ursache gefunden (Fehlerregister `GetDeviceErrors`, 0x17)**: der Chip meldet
+  `XOSC_START` (0x0020) und `PLL_LOCK` (0x0040) — seine Referenz läuft nicht an.
+  Deshalb lehnt er `SetTx`/`SetRx` ab, während Registerzugriffe weiter gehen.
+  Der Fehler bleibt bei **allen** TCXO-Stufen (keine Konfiguration bis 3,3 V),
+  also auch ohne angenommenen TCXO. Das zeigt auf die Hardware des Moduls
+  (Quarz/TCXO) und nicht auf eine Code-Einstellung.
 
 Der GPS-Empfänger liefert NMEA (`NMEA-Empfang bei 9600 Baud`, 0 Prüfsummenfehler),
 hatte drinnen aber noch keinen Fix: `Sat 0, Qual 0, HDOP 99.9`. Qual 0 heißt laut
