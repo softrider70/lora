@@ -31,7 +31,8 @@ $filesToCheck = @()
 # Alle getrackten + neuen Dateien sammeln (ausser build/)
 Get-ChildItem -Path $rootDir -Recurse -File | Where-Object {
     $_.FullName -notmatch '\\build\\' -and
-    $_.FullName -notmatch '\\.git\\'
+    $_.FullName -notmatch '\\.git\\' -and
+    $_.FullName -notmatch '\\.venv\\'
 } | ForEach-Object { $filesToCheck += $_ }
 
 Write-Host "Durchsuche $($filesToCheck.Count) Dateien..."
@@ -56,7 +57,7 @@ foreach ($file in $filesToCheck) {
 
     foreach ($pattern in $apikeyPatterns) {
         if ($content -match $pattern) {
-            $relPath = [System.IO.Path]::GetRelativePath($rootDir, $file.FullName)
+            $relPath = $file.FullName.Substring($rootDir.Path.Length).TrimStart('\')
             $issues += @{
                 File = $relPath
                 Regel = "API-Key/Token gefunden"
@@ -84,7 +85,7 @@ foreach ($file in $filesToCheck) {
 
     foreach ($pattern in $wifiPatterns) {
         if ($content -match $pattern) {
-            $relPath = [System.IO.Path]::GetRelativePath($rootDir, $file.FullName)
+            $relPath = $file.FullName.Substring($rootDir.Path.Length).TrimStart('\')
             $issues += @{
                 File = $relPath
                 Regel = "WiFi-Passwort/SSID gefunden"
@@ -108,7 +109,7 @@ foreach ($file in $filesToCheck) {
 
     foreach ($pattern in $nvsPatterns) {
         if ($content -match $pattern) {
-            $relPath = [System.IO.Path]::GetRelativePath($rootDir, $file.FullName)
+            $relPath = $file.FullName.Substring($rootDir.Path.Length).TrimStart('\')
             $issues += @{
                 File = $relPath
                 Regel = "NVS mit hartcodierten Zugangsdaten"
@@ -134,7 +135,7 @@ $sensitiveFiles = @(
 )
 
 foreach ($file in $filesToCheck) {
-    $relPath = [System.IO.Path]::GetRelativePath($rootDir, $file.FullName)
+    $relPath = $file.FullName.Substring($rootDir.Path.Length).TrimStart('\')
     foreach ($pattern in $sensitiveFiles) {
         if ($relPath -match $pattern) {
             $issues += @{

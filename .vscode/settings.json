@@ -4,6 +4,6 @@
     "--background-index",
     "--query-driver=**"
   ],
-  "idf.currentSetup": "C:\\Users\\user\\Downloads\\GitHub\\VS-Projekte\\CascadeProjects\\esp-idf",
+  "idf.currentSetup": "${env:USERPROFILE}\\Downloads\\GitHub\\VS-Projekte\\CascadeProjects\\esp-idf",
   "idf.port": "COM8"
 }

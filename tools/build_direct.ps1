@@ -1,8 +1,8 @@
 # Direkter Build-Aufruf mit PYTHONUTF8=1
 # Umgeht das Locale-Problem unter de_DE Windows
 
-$ProjectPath = "C:\Users\user\Downloads\GitHub\VS-Projekte\CascadeProjects\lora"
-$IdfPath = "C:\Users\user\Downloads\GitHub\VS-Projekte\CascadeProjects\esp-idf"
+$ProjectPath = "$env:USERPROFILE\Downloads\GitHub\VS-Projekte\CascadeProjects\lora"
+$IdfPath = "$env:USERPROFILE\Downloads\GitHub\VS-Projekte\CascadeProjects\esp-idf"
 $IdfPy = "$IdfPath\tools\idf.py"
 
 Set-Location $ProjectPath

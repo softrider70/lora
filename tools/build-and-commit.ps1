@@ -6,7 +6,7 @@ $ProjectPath = Resolve-Path -Path $ProjectPath
 Set-Location $ProjectPath
 
 # ESP-IDF Umgebung aktivieren
-$espIdfPath = "C:\Users\user\Downloads\GitHub\VS-Projekte\CascadeProjects\esp-idf"
+$espIdfPath = "$env:USERPROFILE\Downloads\GitHub\VS-Projekte\CascadeProjects\esp-idf"
 $exportBat = Join-Path $espIdfPath "export.bat"
 
 if (-not (Test-Path $exportBat)) {

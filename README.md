@@ -136,10 +136,9 @@ lora/
 
 ## Bekannte Befunde (gemessen, nicht vermutet)
 
-Alles am 2026-09-25 aus den Logs der beiden Boards belegt (Build 8–17). Die MAC
-`70:AF:09:xx:xx:xx` (Node-ID 217) gehört dem Board, das jetzt als **Anzeige-Node
-auf COM3** hängt, die MAC `70:AF:09:xx:xx:xx` (Node-ID 9) dem **Sensor-Node auf
-COM8**.
+Alles am 2026-09-25 aus den Logs der beiden Boards belegt. Board-Zuordnung über
+die Node-ID: **Anzeige-Node auf COM3** = Node-ID 217, **Sensor-Node auf COM8** =
+Node-ID 9. Die vollen MAC-Adressen stehen bewusst nicht im Repository.
 
 - **Button-Task hatte 1024 Byte Stack** → „A stack overflow in task button",
   das Board startete in einer Schleife neu. Ebenso `stk_mon` und `display`.
@@ -155,11 +154,12 @@ COM8**.
   ursprünglich konfigurierten GPIO41/42 waren falsch (JTAG-Pins MTDI/MTMS),
   richtig sind GPIO17 (SDA) / GPIO18 (SCL).
 
-**Funkstrecke: noch nicht in Betrieb.** Beide Nodes versuchen alle 5 s zu senden
-(Log: `Kein GPS-Fix - sende Status #N`), aber der SX1262 führt das Sende-Kommando
-nicht aus: 300 ms nach `SET_TX` steht er laut Statusbyte weiter im Standby
-(`0x3A` = STDBY_XOSC, im Sendemodus wäre es `0x6A`), der IRQ-Status bleibt
-`0x0000`. Empfangsmeldungen (`RX:`) gibt es deshalb auf keinem der beiden Boards.
+**Funkstrecke läuft** (seit Build 122/123): Beide Nodes senden und empfangen,
+der Sensor-Node überträgt seine GPS-Position, der Anzeige-Node stellt sie dar.
+Drei Ursachen hatten das Senden vorher blockiert: `CLEAR_DEVICE_ERRORS` ohne
+seine zwei Pflicht-Bytes (das `XOSC_START`-Flag klebte und sperrte TX/RX), eine
+um Faktor 2^14 zu kleine Frequenz-Registerformel (PLL_LOCK) und ein falscher
+Bandbreiten-Code. Die Belege stehen in `AGENTS.md`, Punkt 5.
 
 Dabei bereits behoben und per Log belegt:
 

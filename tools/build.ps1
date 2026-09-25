@@ -1,8 +1,8 @@
 # Build-Skript fuer LoRa ESP32-S3 Projekt
 # Umgeht das Locale-Problem unter Windows
 
-$ProjectPath = "C:\Users\user\Downloads\GitHub\VS-Projekte\CascadeProjects\lora"
-$IdfPath = "C:\Users\user\Downloads\GitHub\VS-Projekte\CascadeProjects\esp-idf"
+$ProjectPath = "$env:USERPROFILE\Downloads\GitHub\VS-Projekte\CascadeProjects\lora"
+$IdfPath = "$env:USERPROFILE\Downloads\GitHub\VS-Projekte\CascadeProjects\esp-idf"
 
 Set-Location $ProjectPath
 

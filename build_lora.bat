@@ -1,8 +1,8 @@
 @echo off
 chcp 65001 > nul
 set PYTHONUTF8=1
-set IDF_PATH=C:\Users\user\Downloads\GitHub\VS-Projekte\CascadeProjects\esp-idf
-cd /d C:\Users\user\Downloads\GitHub\VS-Projekte\CascadeProjects\lora
+set IDF_PATH=%USERPROFILE%\Downloads\GitHub\VS-Projekte\CascadeProjects\esp-idf
+cd /d %USERPROFILE%\Downloads\GitHub\VS-Projekte\CascadeProjects\lora
 call %IDF_PATH%\export.bat > nul
 set IDF_PY_BUILD_JOBS=6
 idf.py build

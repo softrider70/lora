@@ -11,7 +11,7 @@ $env:PYTHONUTF8 = "0"
 
 $idfCandidates = @(
     $IdfPath,
-    "C:\Users\user\Downloads\GitHub\VS-Projekte\CascadeProjects\esp-idf",
+    "$env:USERPROFILE\Downloads\GitHub\VS-Projekte\CascadeProjects\esp-idf",
     "C:\esp\v6.1\esp-idf",
     "C:\esp\esp-idf"
 ) | Where-Object { $_ -and (Test-Path $_) }

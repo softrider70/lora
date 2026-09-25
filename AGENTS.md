@@ -31,7 +31,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\flash-mode.ps1 -Mode
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\flash-mode.ps1 -Mode ota
 ```
 
-- ESP-IDF: `C:\Users\user\Downloads\GitHub\VS-Projekte\CascadeProjects\esp-idf`
+- ESP-IDF: `C:\Users\<Benutzer>\Downloads\GitHub\VS-Projekte\CascadeProjects\esp-idf`
   (**v6.1-dev**), Target `esp32s3`. VS-Code-Setting `idf.currentSetup` zeigt
   dorthin; vorher stand dort `C:\esp\v6.0\esp-idf`, was nicht zum Build passte.
 - Der Build-Zähler läuft über das CMake-Ziel `lora_version` in
@@ -105,7 +105,7 @@ Ausgang auf LOW gehalten.
 5. **SX1262 sendet nicht — GELÖST (Build 122/123).** Der Funkverkehr läuft
    jetzt in **beide Richtungen**: COM8 (Node 9 mit GPS) sendet Positionen,
    COM3 (Node 217) empfängt sie (`RX: Type=0x07, Node=9` →
-   `GPS von Node 9: +50.1234567 (3 Sat)`), und die Statusmeldungen von COM3
+   `GPS von Node 9: +50.1234567 (3 Sat; Wert anonymisiert)`), und die Statusmeldungen von COM3
    kommen auf COM8 an. Die Ursachen (alle im Log belegt):
    1. **`ClearDeviceErrors` (0x07) braucht ZWEI Parameterbytes** (Inhalt egal).
       Vorher wurde nur das Kommando gesendet - das war wirkungslos, das
