@@ -515,33 +515,21 @@ esp_err_t lora_init(void)
     /* Messung am Oszillator vorbereiten: ohne Konfiguration ist DIO3 aus
      * (0 V), mit SetDio3AsTcxoCtrl liegen 1,8 V an. Ein Reset loescht die
      * Konfiguration wieder, damit entsteht ein Rechteck fuer das Oszilloskop. */
-    for (int i = 0; i < LORA_TCXO_MESSTEST; i++) {
-        /* Phase 1: aus (Reset loescht die TCXO-Konfiguration) */
+    /* Dauerhafter Suchimpuls zum Auffinden des Pins: 200 ms DIO3 an (1,8 V),
+     * 100 ms aus. Laeuft endlos, die restliche Anwendung startet dabei nicht.
+     * Zum Abschalten LORA_TCXO_MESSTEST auf 0 setzen und neu flashen. */
+    ESP_LOGW(TAG, "Suchimpuls aktiv: 200 ms an, 100 ms aus - dauerhaft");
+    while (1) {
+        uint8_t tcxo_puls[4] = { 0x02, 0x00, 0x06, 0x40 };
+        sx1262_cmd_write_buf(SX1262_CMD_SET_DIO3_AS_TCXO_CTRL, tcxo_puls, 4);
+        vTaskDelay(pdMS_TO_TICKS(200));
+
+        /* Aus: ein Reset loescht die TCXO-Konfiguration */
         gpio_set_level(LORA_RST_GPIO, 0);
         vTaskDelay(pdMS_TO_TICKS(10));
         gpio_set_level(LORA_RST_GPIO, 1);
-        vTaskDelay(pdMS_TO_TICKS(LORA_MESSTEST_PHASE_MS));
-        ESP_LOGW(TAG, "Messtest %d Phase aus: 0 V erwartet", i + 1);
-
-        /* Phase 2: 1,8 V */
-        uint8_t tcxo_test[4] = { 0x02, 0x00, 0x06, 0x40 };
-        sx1262_cmd_write_buf(SX1262_CMD_SET_DIO3_AS_TCXO_CTRL, tcxo_test, 4);
-        vTaskDelay(pdMS_TO_TICKS(LORA_MESSTEST_PHASE_MS));
-        ESP_LOGW(TAG, "Messtest %d Phase 1,8 V", i + 1);
-
-        /* Phase 3: 3,3 V (hoechste Stufe) */
-        tcxo_test[0] = 0x07;
-        sx1262_cmd_write_buf(SX1262_CMD_SET_DIO3_AS_TCXO_CTRL, tcxo_test, 4);
-        vTaskDelay(pdMS_TO_TICKS(LORA_MESSTEST_PHASE_MS));
-        ESP_LOGW(TAG, "Messtest %d Phase 3,3 V", i + 1);
+        vTaskDelay(pdMS_TO_TICKS(90));
     }
-
-    /* Zurueck in den Normalzustand */
-    gpio_set_level(LORA_RST_GPIO, 0);
-    vTaskDelay(pdMS_TO_TICKS(10));
-    gpio_set_level(LORA_RST_GPIO, 1);
-    vTaskDelay(pdMS_TO_TICKS(30));
-    wait_on_busy(100);
 #endif
 
     /* Standby */
