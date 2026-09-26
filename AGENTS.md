@@ -137,8 +137,39 @@ Ausgang auf LOW gehalten.
       Das Modul ist also ein **SX1262**; mit den SX1261-Werten sendete es rund
       80 dB zu leise. Damit ist erklärbar, warum die Strecke zum Balkon
       zusammenbrach (dort kamen nur noch −106 bis −109 dBm an).
+      **Belegt durch RadioLib:** in `SX1262.h` steht ausdrücklich, dass sich
+      *alle* SX1262 als "SX1261" melden ("it seems that all SX1262 devices
+      report as SX1261") - RadioLib erkennt den SX1262 deshalb genau an diesem
+      String. Der Dump von 0x0320 taugt also **nicht** zur Unterscheidung.
       Endstand: `LORA_PA_SX1262 1`, `deviceSel 0x00`, `hpMax 0x07`,
       `LORA_TX_POWER 20` (Datenblatt V3: 21 ± 1 dBm).
+   7. **OLED: Rauschbild und I2C-Aussetzer (gefunden 2026-09-26).**
+      Zwei getrennte Ursachen:
+      - **Rauschbild:** In `display_init()` stand `display_initialized = true`
+        erst **nach** dem ersten Schreiben. `display_update()`, `display_clear()`
+        und `display_update_page()` steigen bei `!display_initialized` sofort aus -
+        der Bildspeicher wurde also nie gelöscht und das Panel zeigte den
+        zufälligen Einschaltinhalt des SSD1306 (weißes Rauschen). Das Flag wird
+        jetzt **vor** dem Schreiben gesetzt.
+      - **Aussetzer:** `ESP_ERR_INVALID_RESPONSE` / `i2c.master: I2C software
+        timeout`. Betroffen sind **nur die 129-Byte-Daten-transfers** (Kommandos
+        mit 2 Byte laufen) und nur im Startfenster (783-843 ms), also während der
+        LoRa-Initialisierung mit ihren Stromspitzen. Danach läuft der Verkehr
+        fehlerfrei: 2661 Transfers, 19 Fehlschläge - alle im Startfenster.
+      - Kein Busdefekt: bei den Fehlern standen SDA/SCL auf `1 1` (Leitung frei),
+        der SSD1306 gab nur kein ACK.
+      - `i2c_master_bus_reset` im Fehlerpfad ist **falsch**: daraus wurde eine
+        Lawine (74 Fehler/min statt ~20). Takt 100 kHz ist **schlechter** als
+        400 kHz: damit scheitert schon das erste Kommando und der Init bricht ab.
+      - Lösung: `display_send_page()` setzt vor **jedem** Versuch die Adresse neu
+        und wiederholt bis zu 3×. Das Zurücksetzen ist nötig, weil der SSD1306 im
+        Horizontal-Mode sonst hinter der letzten Spalte weiterzählt und die
+        folgenden Seiten verschiebt. Kommandos werden ebenfalls bis 3× gesendet.
+      - Offen (Hardware): Die Aussetzer in den Stromspitzen sind **abgefangen,
+        nicht beseitigt**. Nächster Schritt: Vext (GPIO36) / 3,3 V beim Senden mit
+        dem Oszilloskop messen, ggf. Stützkondensator am OLED.
+      - Zähler: `Transfers ok / wiederholt / fehlgeschlagen` einmal je Minute im
+        Log.
    Frühere Verdachtsfälle (SPI-Takt, Regler-Modus, DIO3-Register,
    Messtest-Varianten) sind damit erledigt. Die 380-mV-Messung am
    Metallbecher hat in die Irre geführt - der Oszillator läuft nachweislich

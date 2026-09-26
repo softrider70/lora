@@ -72,6 +72,10 @@ extern "C" {
  * das war die Belegung der ersten Fassung. */
 #define DISPLAY_ALT_SDA_GPIO    41
 #define DISPLAY_ALT_SCL_GPIO    42
+/* Bus-Takt. 100 kHz brachte nichts: mit 100 kHz scheiterte schon das erste
+ * Kommando (ESP_ERR_INVALID_RESPONSE), waehrend der Probe auf derselben
+ * Adresse ein ACK bekam. Vorerst wieder 400 kHz - der Takt wird gerade
+ * als Ursache geprueft. */
 #define DISPLAY_I2C_FREQ        400000      /* 400 kHz */
 #define DISPLAY_I2C_ADDR        0x3C
 #define DISPLAY_WIDTH           128

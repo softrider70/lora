@@ -149,14 +149,65 @@ static i2c_master_dev_handle_t dev_handle = NULL;
 static uint8_t framebuffer[DISPLAY_PAGES][DISPLAY_WIDTH];
 static bool display_initialized = false;
 
-/* SSD1306 Kommando senden */
+/* display_update() wird schon in display_init() fuer das Testbild gebraucht,
+ * ist aber weiter unten definiert. */
+static void display_update(void);
+
+/* Transfer mit Wiederholung - OHNE Bus-Reset. Messungen (Build 150/151):
+ * der SSD1306 laesst einzelne Transfers unbeantwortet (ESP_ERR_INVALID_RESPONSE),
+ * dabei bleibt SDA kurz tief und ist 10 ms spaeter wieder frei. Ein Reset des
+ * Busses machte daraus eine Lawine (74 Fehler/min) - eine reine Wiederholung
+ * nach kurzer Pause ist richtig. */
+static esp_err_t display_i2c_transfer(const uint8_t *buf, size_t len, int versuche)
+{
+    esp_err_t ret = ESP_FAIL;
+    static uint32_t ok = 0, aussetzer = 0, fehl = 0;
+
+    for (int versuch = 1; versuch <= versuche; versuch++) {
+        ret = i2c_master_transmit(dev_handle, buf, len, pdMS_TO_TICKS(100));
+        if (ret == ESP_OK) {
+            ok++;
+            if (versuch > 1) {
+                aussetzer++;
+            }
+            break;
+        }
+        if (versuch < versuche) {
+            vTaskDelay(pdMS_TO_TICKS(5));
+        }
+    }
+
+    if (ret != ESP_OK) {
+        fehl++;
+        ESP_LOGE(TAG, "Transfer fehlgeschlagen: %d Bytes, %s",
+                 (int)len, esp_err_to_name(ret));
+    }
+
+    /* Einmal je Minute eine Statuszeile: zeigt, ob ueberhaupt Transfers laufen
+     * und wie viele Aussetzer es gibt. */
+    static TickType_t letzte_ausgabe = 0;
+    TickType_t jetzt = xTaskGetTickCount();
+    if (letzte_ausgabe == 0 || (jetzt - letzte_ausgabe) > pdMS_TO_TICKS(60000)) {
+        letzte_ausgabe = jetzt;
+        ESP_LOGI(TAG, "Transfers ok: %lu, davon wiederholt: %lu, fehlgeschlagen: %lu",
+                 (unsigned long)ok, (unsigned long)aussetzer, (unsigned long)fehl);
+    }
+
+    return ret;
+}
+
+/* SSD1306 Kommando senden. Kommandos sind idempotent, sie duerfen wiederholt
+ * werden - noetig, weil der SSD1306 direkt nach dem Reset einzelne Transfers
+ * unbeantwortet laesst. */
 static esp_err_t display_send_cmd(uint8_t cmd)
 {
     uint8_t data[2] = { 0x00, cmd }; /* Co=0, D/C#=0 -> Command */
-    return i2c_master_transmit(dev_handle, data, 2, pdMS_TO_TICKS(100));
+    return display_i2c_transfer(data, 2, 3);
 }
 
-/* SSD1306 Daten senden (framebuffer pageweise) */
+/* SSD1306 Daten senden (framebuffer pageweise). Bewusst OHNE Wiederholung:
+ * der SSD1306 zaehlt im Horizontal-Mode nach 128 Bytes weiter und wuerde bei
+ * einem zweiten Anlauf die folgenden Seiten verschieben. */
 static esp_err_t display_send_data(uint8_t page, const uint8_t *data, size_t len)
 {
     uint8_t *buf = malloc(len + 1);
@@ -165,7 +216,7 @@ static esp_err_t display_send_data(uint8_t page, const uint8_t *data, size_t len
     buf[0] = 0x40; /* Co=0, D/C#=1 -> Data */
     memcpy(buf + 1, data, len);
 
-    esp_err_t ret = i2c_master_transmit(dev_handle, buf, len + 1, pdMS_TO_TICKS(100));
+    esp_err_t ret = display_i2c_transfer(buf, len + 1, 1);
     free(buf);
     return ret;
 }
@@ -313,7 +364,9 @@ esp_err_t display_init(void)
     gpio_config(&vext);
     gpio_set_level(DISPLAY_VEXT_GPIO, 0);
     ESP_LOGI(TAG, "Vext (GPIO%d) eingeschaltet", DISPLAY_VEXT_GPIO);
-    vTaskDelay(pdMS_TO_TICKS(50));
+    /* 200 ms statt 50 ms: Vext braucht beim Hochlaufen Zeit. Mit 50 ms liefen
+     * die ersten Transfers nach dem Init in den Timeout (im Log zu sehen). */
+    vTaskDelay(pdMS_TO_TICKS(200));
 
     /* OLED-Reset freigeben. Bleibt RST offen, haelt der SSD1306 den Reset und
      * antwortet nicht auf seiner I2C-Adresse (ESP_ERR_INVALID_RESPONSE). */
@@ -363,6 +416,20 @@ esp_err_t display_init(void)
         return ret;
     }
 
+    /* Warten, bis das OLED auf seiner Adresse antwortet. Direkt nach dem Reset
+     * nimmt der SSD1306 noch keine Kommandos an: im Log scheiterte der erste
+     * Transfer mit ESP_ERR_INVALID_RESPONSE, waehrend ein Probe 20 ms spaeter
+     * auf derselben Adresse ein ACK bekam. */
+    int warte_ms = 0;
+    while (warte_ms < 1000) {
+        if (i2c_master_probe(bus_handle, DISPLAY_I2C_ADDR, 50) == ESP_OK) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+        warte_ms += 50;
+    }
+    ESP_LOGI(TAG, "OLED antwortet nach %d ms Wartezeit", warte_ms);
+
     /* SSD1306 initialisieren */
     ret = ssd1306_init_seq();
     if (ret != ESP_OK) {
@@ -381,11 +448,21 @@ esp_err_t display_init(void)
         return ret;
     }
 
-    /* Framebuffer clear und senden */
-    memset(framebuffer, 0, sizeof(framebuffer));
-    display_clear();
-
+    /* WICHTIG: Das Flag muss VOR dem ersten Schreiben gesetzt werden.
+     * display_update(), display_clear() und display_update_page() steigen bei
+     * !display_initialized sofort wieder aus. Stand das Flag erst danach,
+     * wurde der Bildspeicher nie geloescht: das Panel zeigte den zufaelligen
+     * Einschaltinhalt des SSD1306 - ein weisses Rauschbild. */
     display_initialized = true;
+
+    /* Bildspeicher loeschen und senden. In diesem Moment laeuft die
+     * LoRa-Initialisierung mit ihren Stromspitzen; einzelne Seiten kommen
+     * deshalb nicht an (im Log: "Transfer fehlgeschlagen: 129 Bytes"). Das ist
+     * unkritisch: der Display-Task schreibt alle acht Zeilen im Sekundentakt
+     * neu, sobald der Funk ruhig ist. */
+    memset(framebuffer, 0, sizeof(framebuffer));
+    display_update();
+
     ESP_LOGI(TAG, "Display initialisiert (128x64, I2C Addr 0x%02X)", DISPLAY_I2C_ADDR);
     return ESP_OK;
 }
@@ -415,22 +492,36 @@ esp_err_t display_deinit(void)
     return ESP_OK;
 }
 
+/* Eine Seite (8 Pixelzeilen, 128 Byte) uebertragen - mit Wiederholung.
+ * Vor JEDEM Versuch wird die Adresse neu gesetzt. Damit ist der zweite Anlauf
+ * gefahrlos: bricht ein Transfer mitten in der Datenfolge ab, steht der
+ * SSD1306 im Horizontal-Mode hinter der letzten geschriebenen Spalte - die
+ * Adresse holt ihn zurueck an den Seitenanfang. Ohne dieses Zuruecksetzen
+ * wandern die Daten in die naechste Seite. */
+static void display_send_page(int page)
+{
+    for (int versuch = 1; versuch <= 3; versuch++) {
+        display_send_cmd(SSD1306_CMD_COLUMNADDR);
+        display_send_cmd(0);
+        display_send_cmd(DISPLAY_WIDTH - 1);
+        display_send_cmd(SSD1306_CMD_PAGEADDR);
+        display_send_cmd(page);
+        display_send_cmd(page);
+
+        if (display_send_data(page, framebuffer[page], DISPLAY_WIDTH) == ESP_OK) {
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+}
+
 /* Framebuffer aufs Display uebertragen */
 static void display_update(void)
 {
     if (!display_initialized) return;
 
-    /* Column- und Page-Address setzen (0..127, 0..7) */
-    display_send_cmd(SSD1306_CMD_COLUMNADDR);
-    display_send_cmd(0);
-    display_send_cmd(DISPLAY_WIDTH - 1);
-    display_send_cmd(SSD1306_CMD_PAGEADDR);
-    display_send_cmd(0);
-    display_send_cmd(DISPLAY_PAGES - 1);
-
-    /* Framebuffer seitenweise uebertragen */
     for (int page = 0; page < DISPLAY_PAGES; page++) {
-        display_send_data(page, framebuffer[page], DISPLAY_WIDTH);
+        display_send_page(page);
     }
 }
 
@@ -442,14 +533,7 @@ static void display_update_page(int page)
     if (!display_initialized) return;
     if (page < 0 || page >= DISPLAY_PAGES) return;
 
-    display_send_cmd(SSD1306_CMD_COLUMNADDR);
-    display_send_cmd(0);
-    display_send_cmd(DISPLAY_WIDTH - 1);
-    display_send_cmd(SSD1306_CMD_PAGEADDR);
-    display_send_cmd(page);
-    display_send_cmd(page);
-
-    display_send_data(page, framebuffer[page], DISPLAY_WIDTH);
+    display_send_page(page);
 }
 
 /* Ein Pixel im Framebuffer setzen */

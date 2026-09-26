@@ -144,10 +144,15 @@ static void lora_rx_callback_handler(const lora_message_t *msg)
     if (msg->type == LORA_MSG_TYPE_GPS) {
         if (gps_unpack_payload(msg, &g_last_rx_gps)) {
             char coord[20];
+            char coord_lon[20];
             format_coord(coord, sizeof(coord), g_last_rx_gps.latitude);
+            format_coord(coord_lon, sizeof(coord_lon), g_last_rx_gps.longitude);
             g_last_rx_gps_valid = true;
-            ESP_LOGI(TAG, "GPS von Node %u: %s (%u Sat)",
-                     msg->node_id, coord, (unsigned)g_last_rx_gps.satellites);
+            /* Breite UND Laenge ins Log: fuer die Reichweitenmessung wird die
+             * vollstaendige Position gebraucht (Breite allein reicht nicht). */
+            ESP_LOGI(TAG, "GPS von Node %u: %s %s (%u Sat)",
+                     msg->node_id, coord, coord_lon,
+                     (unsigned)g_last_rx_gps.satellites);
         }
     }
 
